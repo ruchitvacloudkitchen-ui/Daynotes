@@ -1,6 +1,6 @@
 {
   "name": "DayNote — Notes, Tasks & Reminders",
   "description": "Minimalist voice-first notepad with multilingual dictation (English, Telugu, Hindi), AES-256 encrypted cloud sync, automated offline local backups, attachment boxes, and voice-announced auto-reminders.",
-  "requestFramePermissions": ["microphone"],
+  "requestFramePermissions": ["microphone", "camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

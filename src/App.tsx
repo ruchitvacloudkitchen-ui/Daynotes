@@ -32,6 +32,11 @@ import {
   ScrollText,
   Clock,
   MoreVertical,
+  Camera,
+  Play,
+  Pause,
+  Sparkles,
+  ListTodo,
 } from 'lucide-react';
 import {
   signInWithPopup,
@@ -84,8 +89,18 @@ import {
   getLanguageMeta,
   announceVoiceReminder,
   playReminderChime,
+  pauseVoiceAnnouncement,
+  resumeVoiceAnnouncement,
   stopVoiceAnnouncement,
 } from './utils/voice';
+
+interface AiTaskNotificationItem {
+  noteId: string;
+  taskTitle: string;
+  notificationMessage: string;
+  suggestedMinutes: number;
+  urgency: 'high' | 'medium' | 'low';
+}
 
 interface SpeechRecognitionEvent extends Event {
   resultIndex: number;
@@ -232,7 +247,9 @@ export default function App() {
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showPreviousNotes, setShowPreviousNotes] = useState(true);
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
-  const [selectedDayOffset, setSelectedDayOffset] = useState<number>(0);
+  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date());
+  const [showMonthCalendar, setShowMonthCalendar] = useState<boolean>(false);
+  const [calendarMonthDate, setCalendarMonthDate] = useState<Date>(() => new Date());
   const previousNotesRef = useRef<HTMLDivElement | null>(null);
   const composerTitleInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -273,6 +290,15 @@ export default function App() {
   const [composerPinCode, setComposerPinCode] = useState<string>('');
   const [composerAttachments, setComposerAttachments] = useState<NoteAttachment[]>([]);
   const composerFileInputRef = useRef<HTMLInputElement | null>(null);
+  const composerPhotoInputRef = useRef<HTMLInputElement | null>(null);
+
+  // --- Camera / Take Photo Modal State ---
+  const [cameraModalTarget, setCameraModalTarget] = useState<'composer' | string | null>(
+    null
+  );
+  const [cameraError, setCameraError] = useState<string>('');
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
 
   // --- 4-Digit Number Lock Modal State ---
   const [pinModalState, setPinModalState] = useState<{
@@ -290,9 +316,17 @@ export default function App() {
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const shouldKeepListeningRef = useRef(false);
 
-  // --- Alerts & Modals ---
+  // --- Alerts, Voice Play/Pause & AI Auto Task Notifications ---
   const [activeAlertNote, setActiveAlertNote] = useState<DayNoteItem | null>(null);
   const [speakingNoteId, setSpeakingNoteId] = useState<string | null>(null);
+  const [isSpeechPaused, setIsSpeechPaused] = useState<boolean>(false);
+  const [showLastTasksModal, setShowLastTasksModal] = useState<boolean>(false);
+  const [aiTaskNotifications, setAiTaskNotifications] = useState<AiTaskNotificationItem[]>(
+    []
+  );
+  const [isLoadingAiTasks, setIsLoadingAiTasks] = useState<boolean>(false);
+  const [activeAiAutoNotice, setActiveAiAutoNotice] =
+    useState<AiTaskNotificationItem | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<{
     attachment: NoteAttachment;
     fullUrl: string;
@@ -304,34 +338,58 @@ export default function App() {
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
 
-  // --- 5-Day Schedule Pill Strip (Centered around Today) ---
+  // --- 7-Day Week Schedule Strip (Monday to Sunday, e.g., Mon 19 to Sun 25) ---
   const scheduleDays = useMemo(() => {
-    const today = new Date();
-    const offsets = [-1, 0, 1, 2, 3];
-    return offsets.map((offset) => {
-      const dt = new Date(today);
-      dt.setDate(today.getDate() + offset);
+    const dayOfWeek = selectedDate.getDay(); // 0 (Sun) to 6 (Sat)
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(selectedDate);
+    monday.setDate(selectedDate.getDate() + diffToMonday);
+
+    return Array.from({ length: 7 }, (_, idx) => {
+      const dt = new Date(monday);
+      dt.setDate(monday.getDate() + idx);
       const dayLabel = dt
         .toLocaleDateString('en-US', { weekday: 'short' })
         .toUpperCase();
       const dateNum = dt.getDate();
+      const isSelected =
+        dt.getDate() === selectedDate.getDate() &&
+        dt.getMonth() === selectedDate.getMonth() &&
+        dt.getFullYear() === selectedDate.getFullYear();
       return {
-        offset,
+        idx,
         dayLabel,
         dateNum,
         fullDate: dt,
+        isSelected,
       };
     });
-  }, []);
+  }, [selectedDate]);
 
   const currentMonthYear = useMemo(() => {
-    const base = new Date();
-    base.setDate(base.getDate() + selectedDayOffset);
+    const active = showMonthCalendar ? calendarMonthDate : selectedDate;
     return {
-      month: base.toLocaleDateString('en-US', { month: 'short' }),
-      year: base.getFullYear(),
+      month: active.toLocaleDateString('en-US', { month: 'short' }),
+      year: active.getFullYear(),
     };
-  }, [selectedDayOffset]);
+  }, [selectedDate, showMonthCalendar, calendarMonthDate]);
+
+  // --- Full Month Dates Grid (when user clicks on the Month) ---
+  const fullMonthDays = useMemo(() => {
+    const year = calendarMonthDate.getFullYear();
+    const month = calendarMonthDate.getMonth();
+    const firstDayOfWeek = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const cells: (Date | null)[] = [];
+    for (let i = 0; i < firstDayOfWeek; i++) {
+      cells.push(null);
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      cells.push(new Date(year, month, d));
+    }
+    return cells;
+  }, [calendarMonthDate]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -919,6 +977,114 @@ export default function App() {
     setComposerPinCode('');
 
     await persistNotesUpdate(updated, newNote, `Saved in ${composerImportance} folder`);
+
+    // Automatically generate AI task notification for the newly written note
+    generateAiTaskNotifications([newNote, ...notes.slice(0, 4)], true).catch(() => {});
+  };
+
+  // --- Gemini AI Auto Notifications for Written Notes ("Your Last Tasks") ---
+  const generateAiTaskNotifications = useCallback(
+    async (sourceNotes: DayNoteItem[] = notes, showBannerForNewest = false) => {
+      const unlockedNotes = sourceNotes.filter((n) => !n.isPinLocked);
+      if (unlockedNotes.length === 0) {
+        setAiTaskNotifications([]);
+        return;
+      }
+
+      setIsLoadingAiTasks(true);
+      try {
+        const response = await fetch('/api/ai/task-notifications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            notes: unlockedNotes.slice(0, 6).map((n) => ({
+              id: n.id,
+              title: n.title,
+              content: n.content,
+              language: n.language,
+              reminderTime: n.reminderTime,
+              isCompleted: n.isCompleted,
+            })),
+          }),
+        });
+        const data = await response.json();
+        const list: AiTaskNotificationItem[] = Array.isArray(data?.notifications)
+          ? data.notifications
+          : [];
+        setAiTaskNotifications(list);
+
+        if (showBannerForNewest && list.length > 0) {
+          const newestNotice = list[0];
+          setActiveAiAutoNotice(newestNotice);
+          if ('Notification' in window && Notification.permission === 'granted') {
+            try {
+              new Notification(`AI Task Reminder: ${newestNotice.taskTitle}`, {
+                body: newestNotice.notificationMessage,
+              });
+            } catch {
+              // Ignore
+            }
+          }
+        }
+      } catch {
+        const fallback: AiTaskNotificationItem[] = unlockedNotes.slice(0, 5).map((n) => ({
+          noteId: n.id,
+          taskTitle: n.title,
+          notificationMessage: `Task Alert: ${n.title} — ${(n.content || '').slice(0, 80)}`,
+          suggestedMinutes: 15,
+          urgency: 'medium',
+        }));
+        setAiTaskNotifications(fallback);
+        if (showBannerForNewest && fallback.length > 0) {
+          setActiveAiAutoNotice(fallback[0]);
+        }
+      } finally {
+        setIsLoadingAiTasks(false);
+      }
+    },
+    [notes]
+  );
+
+  const handleOpenYourLastTasks = () => {
+    setShowLastTasksModal(true);
+    generateAiTaskNotifications(notes, false).catch(() => {});
+  };
+
+  // --- Voice Play / Pause Handlers for Composer & Notes ---
+  const handlePlayComposerVoice = () => {
+    const rawContent = [composerContent.trim(), interimTranscript.trim()]
+      .filter(Boolean)
+      .join(' ');
+    const rawTitle = composerTitle.trim() || 'Fresh Note';
+
+    if (speakingNoteId === 'composer' && isSpeechPaused) {
+      resumeVoiceAnnouncement();
+      setIsSpeechPaused(false);
+      return;
+    }
+
+    setIsSpeechPaused(false);
+    setSpeakingNoteId('composer');
+    announceVoiceReminder(
+      rawTitle,
+      rawContent || 'Write or speak your note.',
+      composerLanguage,
+      () => {
+        setSpeakingNoteId('composer');
+        setIsSpeechPaused(false);
+      },
+      () => {
+        setSpeakingNoteId(null);
+        setIsSpeechPaused(false);
+      }
+    );
+  };
+
+  const handlePauseComposerVoice = () => {
+    if (speakingNoteId === 'composer') {
+      pauseVoiceAnnouncement();
+      setIsSpeechPaused(true);
+    }
   };
 
   // --- File Uploads ---
@@ -980,6 +1146,104 @@ export default function App() {
     const updatedList = notes.map((n) => (n.id === noteId ? changedNote : n));
     e.target.value = '';
     await persistNotesUpdate(updatedList, changedNote, 'Added file');
+  };
+
+  // --- Take Photo / Camera Capture ---
+  const stopCameraStream = useCallback(() => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    }
+  }, []);
+
+  const handleOpenTakePhoto = async (target: 'composer' | string) => {
+    setCameraError('');
+    setCameraModalTarget(target);
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraError('Camera stream unavailable. Use Capture File below.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false,
+      });
+      cameraStreamRef.current = stream;
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      }, 60);
+    } catch {
+      setCameraError('Camera permission denied or unavailable. Use Capture File below.');
+    }
+  };
+
+  const handleCloseTakePhoto = () => {
+    stopCameraStream();
+    setCameraModalTarget(null);
+    setCameraError('');
+  };
+
+  const handleCapturePhotoFrame = async () => {
+    if (!videoRef.current || !cameraModalTarget) return;
+    const video = videoRef.current;
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, width, height);
+
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.88)
+    );
+    if (!blob) return;
+
+    const photoFile = new File([blob], `photo_${Date.now()}.jpg`, {
+      type: 'image/jpeg',
+    });
+    const att = await processUploadedFile(photoFile);
+
+    const target = cameraModalTarget;
+    handleCloseTakePhoto();
+
+    if (target === 'composer') {
+      setComposerAttachments((prev) => [...prev.slice(0, 7), att]);
+    } else {
+      const targetNote = notes.find((n) => n.id === target);
+      if (!targetNote) return;
+      const updatedAttachments = [...targetNote.attachments.slice(0, 11), att];
+      let encryptedPayload = targetNote.encryptedPayload;
+      if (targetNote.isEncrypted) {
+        encryptedPayload = await encryptNoteFields(
+          {
+            title: targetNote.title,
+            content: targetNote.content,
+            attachmentsSummary: JSON.stringify(updatedAttachments),
+            alertMode: targetNote.alertMode,
+            importance: targetNote.importance,
+            pinCode: targetNote.pinCode,
+            isPinLocked: targetNote.isPinLocked,
+          },
+          vaultPassphrase
+        );
+      }
+      const changedNote: DayNoteItem = {
+        ...targetNote,
+        attachments: updatedAttachments,
+        encryptedPayload,
+        updatedAtMs: Date.now(),
+      };
+      const updatedList = notes.map((n) => (n.id === target ? changedNote : n));
+      await persistNotesUpdate(updatedList, changedNote, 'Took photo');
+    }
   };
 
   const handleOpenAttachment = async (attachment: NoteAttachment) => {
@@ -1074,19 +1338,33 @@ export default function App() {
 
   const handleSpeakNoteNow = (note: DayNoteItem) => {
     if (note.isPinLocked) return;
-    if (speakingNoteId === note.id) {
-      stopVoiceAnnouncement();
-      setSpeakingNoteId(null);
+    if (speakingNoteId === note.id && isSpeechPaused) {
+      resumeVoiceAnnouncement();
+      setIsSpeechPaused(false);
       return;
     }
+    setIsSpeechPaused(false);
     setSpeakingNoteId(note.id);
     announceVoiceReminder(
       note.title,
       note.content,
       note.language,
-      () => setSpeakingNoteId(note.id),
-      () => setSpeakingNoteId(null)
+      () => {
+        setSpeakingNoteId(note.id);
+        setIsSpeechPaused(false);
+      },
+      () => {
+        setSpeakingNoteId(null);
+        setIsSpeechPaused(false);
+      }
     );
+  };
+
+  const handlePauseNoteVoice = (note: DayNoteItem) => {
+    if (speakingNoteId === note.id) {
+      pauseVoiceAnnouncement();
+      setIsSpeechPaused(true);
+    }
   };
 
   const handleToggleCompleted = async (note: DayNoteItem) => {
@@ -1311,9 +1589,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F3F8FF] via-[#E6F1FF] to-[#D6E8FF] dark:from-[#071022] dark:via-[#0B1833] dark:to-[#0F2147] text-slate-900 dark:text-slate-100 transition-colors duration-150 flex flex-col">
-      {/* TOP BAR: SIMPLE "DN" ICON + "Daynote" (Only D capital) + TAGLINE + SMALL GOOGLE SYMBOL + 3-LINE MENU */}
+      {/* TOP BAR: "NMD" LOGO ICON + "Notemyday" + TAGLINE + SMALL GOOGLE SYMBOL + 3-LINE MENU */}
       <header className="flex items-center justify-between gap-4 px-5 py-3.5 border-b border-white/70 dark:border-slate-800/80 bg-white/70 dark:bg-[#0B1730]/80 backdrop-blur-md sticky top-0 z-30">
-        {/* Zone 1: Simple DN Icon + "Daynote" + Tagline */}
+        {/* Zone 1: "NMD" Logo Icon + "Notemyday" + Tagline */}
         <div className="flex items-center gap-3 min-w-0">
           <a
             href="#top"
@@ -1325,11 +1603,11 @@ export default function App() {
             }}
             className="flex items-center gap-2.5 shrink-0"
           >
-            <span className="w-9 h-9 rounded-xl bg-[#1273FF] text-white text-sm font-bold flex items-center justify-center tracking-tight shadow-sm shadow-blue-500/30 shrink-0">
-              DN
+            <span className="px-2 h-9 rounded-xl bg-[#1273FF] text-white text-xs font-extrabold flex items-center justify-center tracking-tight shadow-sm shadow-blue-500/30 shrink-0">
+              NMD
             </span>
             <span className="text-xl font-bold tracking-tight text-slate-950 dark:text-white whitespace-nowrap">
-              Daynote
+              Notemyday
             </span>
           </a>
           <span className="text-sm font-medium text-slate-500 dark:text-slate-300 truncate hidden sm:inline">
@@ -1616,32 +1894,74 @@ export default function App() {
           <div className="flex items-center gap-2.5">
             <Volume2 className="w-5 h-5 text-white shrink-0" />
             <div>
-              <p className="text-sm font-bold">
-                Alert ({activeAlertNote.alertMode}): {activeAlertNote.title}
-              </p>
-              <p className="text-xs text-blue-100">
-                {activeAlertNote.content}
-              </p>
+              <p className="text-sm font-bold">{activeAlertNote.title}</p>
+              <p className="text-xs text-blue-100">{activeAlertNote.content}</p>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() => handleSpeakNoteNow(activeAlertNote)}
-              className="px-3 py-1 text-xs font-semibold bg-white text-[#1273FF] rounded-lg cursor-pointer"
+              className="flex items-center gap-1 px-3 py-1 text-xs font-semibold bg-white text-[#1273FF] rounded-lg cursor-pointer"
             >
-              Speak
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>Play</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePauseNoteVoice(activeAlertNote)}
+              className="flex items-center gap-1 px-3 py-1 text-xs font-semibold bg-white/20 text-white rounded-lg cursor-pointer"
+            >
+              <Pause className="w-3.5 h-3.5" />
+              <span>Pause</span>
             </button>
             <button
               type="button"
               onClick={() => {
                 stopVoiceAnnouncement();
                 setSpeakingNoteId(null);
+                setIsSpeechPaused(false);
                 setActiveAlertNote(null);
               }}
               className="px-3 py-1 text-xs font-semibold border border-white/60 text-white rounded-lg cursor-pointer"
             >
               Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* GEMINI AI AUTO TASK NOTIFICATION BANNER */}
+      {activeAiAutoNotice && (
+        <div className="bg-gradient-to-r from-[#1273FF] to-[#2563EB] text-white px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 shadow-sm border-b border-blue-400/30">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Sparkles className="w-4 h-4 text-amber-300 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-xs font-bold tracking-wide uppercase text-blue-100">
+                AI Auto Task Notification · {activeAiAutoNotice.taskTitle}
+              </p>
+              <p className="text-sm font-medium text-white truncate">
+                {activeAiAutoNotice.notificationMessage}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setShowLastTasksModal(true);
+              }}
+              className="px-2.5 py-1 text-xs font-bold bg-white text-[#1273FF] rounded-lg cursor-pointer"
+            >
+              View Tasks
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveAiAutoNotice(null)}
+              className="p-1 text-blue-100 hover:text-white cursor-pointer"
+              aria-label="Dismiss AI notification"
+            >
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -1763,55 +2083,170 @@ export default function App() {
         ) : (
           /* HOME SCHEDULE & NOTE INTERFACE MATCHING REFERENCE SCREENSHOT */
           <div className="space-y-6">
-            {/* SCHEDULE HEADER: MONTH + YEAR & "Add New Note" ACTION + VERTICAL PILL DATE SCROLLER */}
-            <section className="space-y-4">
+            {/* SCHEDULE HEADER: MONTH + YEAR (CLICK TO SHOW FULL MONTH DATES) & SMALL DATE BOXES */}
+            <section className="space-y-3">
               <div className="flex items-center justify-between">
                 <button
                   type="button"
-                  onClick={() => setSelectedDayOffset(0)}
-                  className="flex items-center gap-2 text-2xl sm:text-3xl tracking-tight text-slate-950 dark:text-white cursor-pointer"
+                  onClick={() => {
+                    setCalendarMonthDate(new Date(selectedDate));
+                    setShowMonthCalendar((prev) => !prev);
+                  }}
+                  className="flex items-center gap-1.5 text-xl sm:text-2xl tracking-tight text-slate-950 dark:text-white cursor-pointer"
+                  title="Click to view full month dates"
                 >
                   <span className="font-extrabold">{currentMonthYear.month}</span>
                   <span className="font-light text-slate-700 dark:text-slate-300">
                     {currentMonthYear.year}
                   </span>
-                  <ChevronDown className="w-5 h-5 text-slate-700 dark:text-slate-300 mt-0.5" />
+                  <ChevronDown
+                    className={`w-4 h-4 text-slate-700 dark:text-slate-300 mt-0.5 transition-transform ${
+                      showMonthCalendar ? 'rotate-180 text-[#1273FF]' : ''
+                    }`}
+                  />
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => composerTitleInputRef.current?.focus()}
-                  className="text-sm sm:text-base font-bold text-[#1273FF] dark:text-blue-400 hover:underline cursor-pointer"
-                >
-                  Add New Note
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenYourLastTasks}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-bold rounded-xl bg-white/90 dark:bg-slate-800 border border-blue-200 dark:border-slate-700 text-[#1273FF] dark:text-blue-300 hover:bg-blue-50 transition-colors shadow-xs cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-[#1273FF]" />
+                    <span>Your Last Tasks</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => composerTitleInputRef.current?.focus()}
+                    className="px-3 py-1.5 text-xs sm:text-sm font-bold rounded-xl bg-[#1273FF] text-white hover:bg-blue-600 transition-colors shadow-xs cursor-pointer"
+                  >
+                    Add New Note
+                  </button>
+                </div>
               </div>
 
-              {/* 5 Vertical Capsule Date Pills (SUN 19, MON 20 active blue, TUE 21, WED 22, THU 23) */}
-              <div className="grid grid-cols-5 gap-2.5 sm:gap-3.5 pt-1">
+              {/* Full Month Dates Calendar (Shown when user clicks on the Month) */}
+              {showMonthCalendar && (
+                <div className="p-4 schedule-card-light backdrop-blur-md border border-white/95 dark:border-slate-800 rounded-2xl shadow-md space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-blue-100/80 dark:border-slate-800">
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                      {calendarMonthDate.toLocaleDateString('en-US', {
+                        month: 'long',
+                        year: 'numeric',
+                      })}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCalendarMonthDate(
+                            new Date(
+                              calendarMonthDate.getFullYear(),
+                              calendarMonthDate.getMonth() - 1,
+                              1
+                            )
+                          )
+                        }
+                        className="px-2 py-0.5 text-xs font-bold rounded-lg bg-white/90 dark:bg-slate-800 border border-blue-100 dark:border-slate-700 cursor-pointer"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const now = new Date();
+                          setSelectedDate(now);
+                          setCalendarMonthDate(now);
+                        }}
+                        className="px-2 py-0.5 text-xs font-bold rounded-lg bg-blue-50 text-[#1273FF] dark:bg-slate-800 dark:text-blue-400 cursor-pointer"
+                      >
+                        Today
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCalendarMonthDate(
+                            new Date(
+                              calendarMonthDate.getFullYear(),
+                              calendarMonthDate.getMonth() + 1,
+                              1
+                            )
+                          )
+                        }
+                        className="px-2 py-0.5 text-xs font-bold rounded-lg bg-white/90 dark:bg-slate-800 border border-blue-100 dark:border-slate-700 cursor-pointer"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Weekday Labels */}
+                  <div className="grid grid-cols-7 gap-1 text-center">
+                    {['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map((wd) => (
+                      <span
+                        key={wd}
+                        className="text-[10px] font-bold text-slate-400 dark:text-slate-500 py-0.5"
+                      >
+                        {wd}
+                      </span>
+                    ))}
+
+                    {/* All Month Dates */}
+                    {fullMonthDays.map((dt, index) => {
+                      if (!dt) {
+                        return <div key={`empty_${index}`} className="h-7" />;
+                      }
+                      const isSelected =
+                        dt.getDate() === selectedDate.getDate() &&
+                        dt.getMonth() === selectedDate.getMonth() &&
+                        dt.getFullYear() === selectedDate.getFullYear();
+                      return (
+                        <button
+                          key={dt.toISOString()}
+                          type="button"
+                          onClick={() => {
+                            setSelectedDate(dt);
+                            setShowMonthCalendar(false);
+                          }}
+                          className={`h-7 rounded-lg text-xs font-bold tabular-nums flex items-center justify-center transition-colors cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#1273FF] text-white shadow-xs'
+                              : 'text-slate-700 dark:text-slate-200 hover:bg-blue-100/70 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {dt.getDate()}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* One Week Days with Dates: Mon 19 to Sun 25 (7 Small Date Boxes) */}
+              <div className="grid grid-cols-7 gap-1.5 sm:gap-2 pt-0.5">
                 {scheduleDays.map((d) => {
-                  const isSelected = selectedDayOffset === d.offset;
                   return (
                     <button
-                      key={d.offset}
+                      key={d.fullDate.toISOString()}
                       type="button"
-                      onClick={() => setSelectedDayOffset(d.offset)}
-                      className={`flex flex-col items-center justify-center py-4 sm:py-5 rounded-[34px] transition-colors cursor-pointer ${
-                        isSelected
-                          ? 'bg-[#1273FF] text-white shadow-lg shadow-blue-500/30'
-                          : 'bg-white/65 dark:bg-slate-800/70 border border-white/90 dark:border-slate-700/80 text-slate-800 dark:text-slate-200 hover:bg-white/90'
+                      onClick={() => setSelectedDate(d.fullDate)}
+                      className={`py-2 px-1 rounded-2xl flex flex-col items-center justify-center transition-colors cursor-pointer ${
+                        d.isSelected
+                          ? 'bg-[#1273FF] text-white shadow-md shadow-blue-500/25'
+                          : 'bg-white/70 dark:bg-slate-800/70 border border-white/90 dark:border-slate-700/80 text-slate-800 dark:text-slate-200 hover:bg-white/90'
                       }`}
                     >
                       <span
-                        className={`text-xs font-semibold tracking-wider ${
-                          isSelected
+                        className={`text-[10px] font-semibold tracking-wide leading-none ${
+                          d.isSelected
                             ? 'text-white/95'
                             : 'text-slate-500 dark:text-slate-400'
                         }`}
                       >
                         {d.dayLabel}
                       </span>
-                      <span className="text-xl sm:text-2xl font-bold mt-2 tabular-nums">
+                      <span className="text-sm font-bold mt-1 leading-none tabular-nums">
                         {d.dateNum}
                       </span>
                     </button>
@@ -1820,10 +2255,10 @@ export default function App() {
               </div>
             </section>
 
-            {/* NOTE COMPOSER CARD IN SOFT SKY-BLUE / TRANSLUCENT WHITE STYLE */}
+            {/* NOTE COMPOSER CARD WITH DIAGONAL CROSS LINES FOR FRESH NOTE & TITLE BACKGROUND */}
             <section
               aria-label="New Note"
-              className="schedule-card-light backdrop-blur-md border border-white/90 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-[0_8px_30px_rgba(18,115,255,0.06)]"
+              className="fresh-note-crosslines backdrop-blur-md border border-white/90 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-[0_8px_30px_rgba(18,115,255,0.06)]"
             >
               {/* Top Row: Language Button + Lock Symbol Beside Language Box + Speak Button */}
               <div className="flex items-center justify-between gap-2 pb-3 border-b border-blue-100/80 dark:border-slate-800">
@@ -1922,15 +2357,34 @@ export default function App() {
                 </div>
               )}
 
-              {/* Note Inputs with Much Bigger "Note" Entry Box */}
+              {/* Note Inputs with Color Dots on Top of the Title & Cross-Line Title Background */}
               <form onSubmit={handleCreateNote} className="space-y-3.5">
+                {/* Round Color Dots Placed on Top of the Title */}
+                <div className="flex items-center gap-2 px-0.5">
+                  {COLOR_FOLDERS.map((col) => {
+                    const active = composerImportance === col.id;
+                    return (
+                      <button
+                        key={col.id}
+                        type="button"
+                        onClick={() => setComposerImportance(col.id)}
+                        aria-label={col.folderName}
+                        title={col.folderName}
+                        className={`w-4 h-4 rounded-full ${col.bgClass} flex items-center justify-center cursor-pointer`}
+                      >
+                        {active && <Check className="w-2.5 h-2.5 text-white stroke-[3]" />}
+                      </button>
+                    );
+                  })}
+                </div>
+
                 <input
                   ref={composerTitleInputRef}
                   type="text"
                   value={composerTitle}
                   onChange={(e) => setComposerTitle(e.target.value)}
                   placeholder="Title..."
-                  className="w-full px-4 py-2.5 text-base font-bold bg-white/90 dark:bg-slate-900/90 border border-blue-100 dark:border-slate-700 rounded-xl focus:outline-none focus:border-[#1273FF] text-slate-900 dark:text-white"
+                  className="w-full px-4 py-2.5 text-base font-bold title-crosslines border border-blue-200/90 dark:border-slate-700 rounded-xl focus:outline-none focus:border-[#1273FF] text-slate-900 dark:text-white"
                 />
 
                 <textarea
@@ -1942,31 +2396,33 @@ export default function App() {
                   }
                   onChange={(e) => setComposerContent(e.target.value)}
                   placeholder="Note..."
-                  className="w-full min-h-[180px] px-4 py-3 text-base leading-relaxed bg-white/90 dark:bg-slate-900/90 border border-blue-100 dark:border-slate-700 rounded-xl focus:outline-none focus:border-[#1273FF] text-slate-900 dark:text-white resize-y"
+                  className="w-full min-h-[180px] px-4 py-3 text-base leading-relaxed bg-white/95 dark:bg-slate-900/90 border border-blue-100 dark:border-slate-700 rounded-xl focus:outline-none focus:border-[#1273FF] text-slate-900 dark:text-white resize-y"
                 />
 
-                {/* Controls Row: Constant-Size Round Color Buttons (With Right Tick Mark Only) + Reminder Button + Alert */}
+                {/* Upper Controls Row: "Take photo" + "Set Reminder" + "voice" with Play & Pause Buttons Beside It */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                  {/* Small Round Color Buttons — Constant Size, Only Right Tick Mark Changes */}
+                  {/* Take Photo Moved Up */}
                   <div className="flex items-center gap-2">
-                    {COLOR_FOLDERS.map((col) => {
-                      const active = composerImportance === col.id;
-                      return (
-                        <button
-                          key={col.id}
-                          type="button"
-                          onClick={() => setComposerImportance(col.id)}
-                          aria-label={col.folderName}
-                          title={col.folderName}
-                          className={`w-4 h-4 rounded-full ${col.bgClass} flex items-center justify-center cursor-pointer`}
-                        >
-                          {active && <Check className="w-2.5 h-2.5 text-white stroke-[3]" />}
-                        </button>
-                      );
-                    })}
+                    <button
+                      type="button"
+                      onClick={() => handleOpenTakePhoto('composer')}
+                      className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-xl border border-blue-200 dark:border-slate-700 hover:border-[#1273FF] bg-white/90 dark:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors shrink-0 cursor-pointer"
+                      title="Take photo"
+                    >
+                      <Camera className="w-3.5 h-3.5 text-[#1273FF]" />
+                      <span>Take photo</span>
+                    </button>
+                    <input
+                      ref={composerPhotoInputRef}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={handleComposerFilesUpload}
+                      className="hidden"
+                    />
                   </div>
 
-                  {/* Reminder Button (5min, 15min, 30min, set timer) + Alert (voice, text, off) */}
+                  {/* Set Reminder Button (5min, 15min, 30min, set timer) + voice with Play & Pause beside it */}
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="relative">
                       <button
@@ -1976,7 +2432,7 @@ export default function App() {
                       >
                         <Clock className="w-3.5 h-3.5 text-[#1273FF]" />
                         <span>
-                          Reminder{composerReminderLabel ? `: ${composerReminderLabel}` : ''}
+                          Set Reminder{composerReminderLabel ? `: ${composerReminderLabel}` : ''}
                         </span>
                         <ChevronDown className="w-3 h-3" />
                       </button>
@@ -2022,22 +2478,47 @@ export default function App() {
                       )}
                     </div>
 
-                    <span className="text-xs font-semibold text-slate-500">Alert</span>
-                    <div className="inline-flex items-center p-0.5 bg-blue-50/80 dark:bg-slate-800 rounded-xl border border-blue-100 dark:border-slate-700 gap-0.5">
-                      {(['voice', 'text', 'off'] as AlertMode[]).map((mode) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => setComposerAlertMode(mode)}
-                          className={`px-2 py-0.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                            composerAlertMode === mode
-                              ? 'bg-[#1273FF] text-white'
-                              : 'text-slate-600 dark:text-slate-400'
-                          }`}
-                        >
-                          {mode}
-                        </button>
-                      ))}
+                    {/* "voice" button + Play and Pause buttons beside it ("text" and "off" removed) */}
+                    <div className="inline-flex items-center p-0.5 bg-blue-50/90 dark:bg-slate-800 rounded-xl border border-blue-200 dark:border-slate-700 gap-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setComposerAlertMode((prev) => (prev === 'voice' ? 'off' : 'voice'))
+                        }
+                        className={`px-2.5 py-0.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          composerAlertMode === 'voice'
+                            ? 'bg-[#1273FF] text-white'
+                            : 'text-slate-700 dark:text-slate-300 hover:bg-white/70'
+                        }`}
+                      >
+                        voice
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePlayComposerVoice}
+                        title="Play voice"
+                        aria-label="Play voice"
+                        className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                          speakingNoteId === 'composer' && !isSpeechPaused
+                            ? 'bg-[#1273FF] text-white'
+                            : 'text-[#1273FF] hover:bg-white/80 dark:hover:bg-slate-700'
+                        }`}
+                      >
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePauseComposerVoice}
+                        title="Pause voice"
+                        aria-label="Pause voice"
+                        className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                          speakingNoteId === 'composer' && isSpeechPaused
+                            ? 'bg-[#1273FF] text-white'
+                            : 'text-slate-600 dark:text-slate-300 hover:bg-white/80 dark:hover:bg-slate-700'
+                        }`}
+                      >
+                        <Pause className="w-3.5 h-3.5" />
+                      </button>
                     </div>
 
                     {showComposerCustomTimer && composerAlertMode !== 'off' && (
@@ -2051,7 +2532,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Bottom Row of Note Box: Small File Boxes + Save Button */}
+                {/* Bottom Row of Note Box: Uploaded Previews on Left + "File" Moved to Right Side & Save Button */}
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-blue-100/80 dark:border-slate-800">
                   <div className="flex flex-wrap items-center gap-1.5">
                     {composerAttachments.map((att) => (
@@ -2083,15 +2564,18 @@ export default function App() {
                         </button>
                       </div>
                     ))}
+                  </div>
 
+                  {/* Right Side: "File" Button + "Save" Button */}
+                  <div className="flex items-center gap-2 ml-auto">
                     <button
                       type="button"
                       onClick={() => composerFileInputRef.current?.click()}
-                      className="w-8 h-8 rounded-lg border border-dashed border-blue-300 dark:border-slate-700 hover:border-[#1273FF] bg-white/80 dark:bg-slate-900/60 flex flex-col items-center justify-center text-slate-500 transition-colors shrink-0 cursor-pointer"
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-dashed border-blue-300 dark:border-slate-700 hover:border-[#1273FF] bg-white/90 dark:bg-slate-900/60 text-xs font-semibold text-slate-700 dark:text-slate-200 transition-colors shrink-0 cursor-pointer"
                       title="Add file"
                     >
-                      <Plus className="w-3 h-3 text-[#1273FF]" />
-                      <span className="text-[9px] font-semibold">File</span>
+                      <Plus className="w-3.5 h-3.5 text-[#1273FF]" />
+                      <span>File</span>
                     </button>
                     <input
                       ref={composerFileInputRef}
@@ -2101,14 +2585,14 @@ export default function App() {
                       onChange={handleComposerFilesUpload}
                       className="hidden"
                     />
-                  </div>
 
-                  <button
-                    type="submit"
-                    className="px-5 py-2 text-xs font-bold bg-[#1273FF] hover:bg-blue-600 text-white rounded-xl shadow-sm shadow-blue-500/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    Save
-                  </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2 text-xs font-bold bg-[#1273FF] hover:bg-blue-600 text-white rounded-xl shadow-sm shadow-blue-500/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      Save
+                    </button>
+                  </div>
                 </div>
               </form>
             </section>
@@ -2151,7 +2635,7 @@ export default function App() {
               </div>
             )}
 
-            {/* PREVIOUS NOTES SCHEDULE TIMELINE SECTION (MATCHING SCREENSHOT TIMELINE & CARDS) */}
+            {/* PREVIOUS NOTES SCHEDULE TIMELINE SECTION (SOLID DARKER LIGHT-BLUE CARDS, NO CROSS LINES) */}
             {showPreviousNotes && (
               <div ref={previousNotesRef} className="space-y-4">
                 <div className="flex items-center justify-between gap-3">
@@ -2171,52 +2655,96 @@ export default function App() {
                 </div>
 
                 {filteredNotes.length === 0 ? (
-                  <div className="p-8 schedule-card-light border border-white/90 dark:border-slate-800 rounded-2xl text-center">
-                    <p className="text-sm font-medium text-slate-500">No notes</p>
+                  <div className="p-8 schedule-card-light border border-blue-200/90 dark:border-slate-800 rounded-2xl text-center">
+                    <p className="text-sm font-medium text-slate-600 dark:text-slate-400">No notes</p>
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {filteredNotes.map((note, idx) => {
+                    {filteredNotes.map((note) => {
                       const isExpanded = expandedNoteId === note.id;
-                      const isBlueFeatured = isExpanded || idx === filteredNotes.length - 1;
                       const isSpeakingThis = speakingNoteId === note.id;
                       const isEditingThis = editingNoteId === note.id;
                       const langMeta = getLanguageMeta(note.language);
                       const timeLabel = formatTimelineHour(note);
 
                       return (
-                        <React.Fragment key={note.id}>
-                          {/* Current Time Blue Line Divider before the featured blue card (just like 13:00 in screenshot) */}
-                          {idx === filteredNotes.length - 1 && filteredNotes.length > 1 && (
-                            <div className="flex items-center gap-3 py-1">
-                              <span className="w-12 text-xs font-semibold text-slate-400 dark:text-slate-500 font-mono tabular-nums text-right">
-                                13:00
-                              </span>
-                              <div className="flex-1 flex items-center">
-                                <span className="w-2.5 h-2.5 rounded-full bg-[#1273FF] shrink-0" />
-                                <div className="h-[2px] flex-1 bg-gradient-to-r from-[#1273FF] to-[#1273FF]/30" />
-                              </div>
-                            </div>
-                          )}
+                        <div key={note.id} className="space-y-1.5">
+                          {/* Time Placed Above the Note Box */}
+                          <div className="flex items-center gap-2 px-1">
+                            <span className="w-2 h-2 rounded-full bg-[#1273FF] shrink-0" />
+                            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+                              {timeLabel}
+                            </span>
+                            <div className="h-[1px] flex-1 bg-gradient-to-r from-[#1273FF]/35 to-transparent" />
+                          </div>
 
-                          <div className="flex items-start gap-3 sm:gap-4">
-                            {/* Left Time Column (09:00, 11:00, 14:00) */}
-                            <div className="w-12 pt-3 text-right shrink-0">
-                              <span className="text-xs sm:text-sm font-semibold text-slate-400 dark:text-slate-500 font-mono tabular-nums">
-                                {timeLabel}
-                              </span>
+                          {/* Schedule Note Card — Solid Slightly Darker Light Blue (No Cross Lines) */}
+                          <article
+                            className={`w-full rounded-2xl px-5 py-4 transition-colors text-slate-900 dark:text-white ${
+                              isExpanded
+                                ? 'schedule-card-light-active border border-[#7DB8FF] dark:border-blue-500/60 shadow-[0_6px_24px_rgba(18,115,255,0.12)]'
+                                : 'schedule-card-light border border-[#A6CEFF] dark:border-slate-700 shadow-[0_4px_18px_rgba(18,115,255,0.06)]'
+                            }`}
+                          >
+                            {/* Top of the Title: Round Color Dots */}
+                            <div className="flex items-center gap-1.5 pb-1.5">
+                              {COLOR_FOLDERS.map((col) => {
+                                const active = note.importance === col.id;
+                                return (
+                                  <button
+                                    key={col.id}
+                                    type="button"
+                                    onClick={() => handleSetNoteImportance(note, col.id)}
+                                    aria-label={col.folderName}
+                                    title={col.folderName}
+                                    className={`w-3.5 h-3.5 rounded-full ${col.bgClass} flex items-center justify-center cursor-pointer`}
+                                  >
+                                    {active && (
+                                      <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
+                                    )}
+                                  </button>
+                                );
+                              })}
                             </div>
 
-                            {/* Right Schedule Note Card */}
-                            <article
-                              className={`flex-1 rounded-2xl px-5 py-4 transition-colors ${
-                                isBlueFeatured
-                                  ? 'schedule-card-blue text-white shadow-lg shadow-blue-500/25 border border-blue-400/40'
-                                  : 'schedule-card-light text-slate-900 dark:text-white border border-white/95 dark:border-slate-800 shadow-[0_4px_20px_rgba(18,115,255,0.05)]'
-                              }`}
-                            >
-                              {/* Heading Row: Uses Note Title for Note Name */}
-                              <div className="flex items-center justify-between gap-2">
+                            {/* Heading Row: Uses Note Title for Note Name */}
+                            <div className="flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedNoteId((prev) =>
+                                    prev === note.id ? null : note.id
+                                  )
+                                }
+                                className="flex items-center gap-2 text-left flex-1 min-w-0 cursor-pointer"
+                              >
+                                <span className="text-base font-bold truncate text-slate-900 dark:text-white">
+                                  {note.title}
+                                </span>
+                                {note.isPinLocked && (
+                                  <Lock className="w-3.5 h-3.5 shrink-0 text-slate-600 dark:text-slate-300" />
+                                )}
+                              </button>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                {/* Language Tag + Small Lock Symbol Beside It */}
+                                <span className="px-2 py-0.5 text-xs font-semibold rounded-lg bg-white/85 dark:bg-slate-800 text-[#1273FF] dark:text-blue-300 border border-blue-200 dark:border-slate-700">
+                                  {langMeta.label}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleClickNoteLock(note)}
+                                  title={
+                                    note.isPinLocked ? 'Unlock 4-digit PIN' : 'Set 4-digit PIN'
+                                  }
+                                  className="p-1 cursor-pointer text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
+                                >
+                                  {note.isPinLocked ? (
+                                    <Lock className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <Unlock className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -2224,389 +2752,287 @@ export default function App() {
                                       prev === note.id ? null : note.id
                                     )
                                   }
-                                  className="flex items-center gap-2 text-left flex-1 min-w-0 cursor-pointer"
+                                  className="p-1 cursor-pointer text-slate-600 hover:text-slate-950 dark:text-slate-400"
+                                  aria-label="Toggle note details"
                                 >
-                                  <span
-                                    className={`text-base font-bold truncate ${
-                                      isBlueFeatured
-                                        ? 'text-white'
-                                        : 'text-slate-900 dark:text-white'
-                                    }`}
-                                  >
-                                    {note.title}
-                                  </span>
-                                  {note.isPinLocked && (
-                                    <Lock
-                                      className={`w-3.5 h-3.5 shrink-0 ${
-                                        isBlueFeatured ? 'text-white/90' : 'text-slate-500'
-                                      }`}
-                                    />
-                                  )}
+                                  <MoreVertical className="w-4 h-4" />
                                 </button>
-
-                                <div className="flex items-center gap-2 shrink-0">
-                                  {/* Round Color Buttons — Constant Size, Only Right Tick Mark Changes */}
-                                  <div className="flex items-center gap-1.5 bg-black/10 dark:bg-black/25 px-2 py-1 rounded-full">
-                                    {COLOR_FOLDERS.map((col) => {
-                                      const active = note.importance === col.id;
-                                      return (
-                                        <button
-                                          key={col.id}
-                                          type="button"
-                                          onClick={() => handleSetNoteImportance(note, col.id)}
-                                          aria-label={col.folderName}
-                                          title={col.folderName}
-                                          className={`w-3.5 h-3.5 rounded-full ${col.bgClass} flex items-center justify-center cursor-pointer`}
-                                        >
-                                          {active && (
-                                            <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
-                                          )}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-
-                                  {/* Language Tag + Small Lock Symbol Beside It */}
-                                  <span
-                                    className={`px-2 py-0.5 text-xs font-semibold rounded-lg ${
-                                      isBlueFeatured
-                                        ? 'bg-white/20 text-white'
-                                        : 'bg-blue-50 dark:bg-slate-800 text-[#1273FF] dark:text-blue-300'
-                                    }`}
-                                  >
-                                    {langMeta.label}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleClickNoteLock(note)}
-                                    title={
-                                      note.isPinLocked ? 'Unlock 4-digit PIN' : 'Set 4-digit PIN'
-                                    }
-                                    className={`p-1 cursor-pointer ${
-                                      isBlueFeatured
-                                        ? 'text-white/90 hover:text-white'
-                                        : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                                    }`}
-                                  >
-                                    {note.isPinLocked ? (
-                                      <Lock className="w-3.5 h-3.5" />
-                                    ) : (
-                                      <Unlock className="w-3.5 h-3.5" />
-                                    )}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setExpandedNoteId((prev) =>
-                                        prev === note.id ? null : note.id
-                                      )
-                                    }
-                                    className={`p-1 cursor-pointer ${
-                                      isBlueFeatured ? 'text-white/90' : 'text-slate-400'
-                                    }`}
-                                    aria-label="Toggle note details"
-                                  >
-                                    <MoreVertical className="w-4 h-4" />
-                                  </button>
-                                </div>
                               </div>
+                            </div>
 
-                              {/* Expanded Note Content (when user clicks the note title) */}
-                              {isExpanded && (
-                                <div
-                                  className={`mt-3 pt-3 border-t space-y-3 ${
-                                    isBlueFeatured
-                                      ? 'border-white/20'
-                                      : 'border-blue-100/80 dark:border-slate-800'
-                                  }`}
-                                >
-                                  {note.isPinLocked ? (
-                                    <div className="py-1 flex items-center justify-between">
-                                      <span
-                                        className={`text-xs font-mono ${
-                                          isBlueFeatured ? 'text-white/90' : 'text-slate-500'
-                                        }`}
-                                      >
-                                        •••• Locked Note
-                                      </span>
+                            {/* Expanded Note Content (when user clicks the note title) */}
+                            {isExpanded && (
+                              <div className="mt-3 pt-3 border-t border-blue-300/70 dark:border-slate-700 space-y-3">
+                                {note.isPinLocked ? (
+                                  <div className="py-1 flex items-center justify-between">
+                                    <span className="text-xs font-mono text-slate-700 dark:text-slate-300">
+                                      •••• Locked Note
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleClickNoteLock(note)}
+                                      className="px-3 py-1 text-xs font-bold rounded-xl cursor-pointer bg-[#1273FF] text-white"
+                                    >
+                                      Unlock
+                                    </button>
+                                  </div>
+                                ) : isEditingThis ? (
+                                  <div className="space-y-2 text-slate-900">
+                                    <input
+                                      type="text"
+                                      value={editTitle}
+                                      onChange={(e) => setEditTitle(e.target.value)}
+                                      className="w-full px-3 py-1.5 text-sm font-semibold bg-white dark:bg-slate-900 dark:text-white border border-blue-200 rounded-xl"
+                                    />
+                                    <textarea
+                                      rows={3}
+                                      value={editContent}
+                                      onChange={(e) => setEditContent(e.target.value)}
+                                      className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 dark:text-white border border-blue-200 rounded-xl resize-none"
+                                    />
+                                    <div className="flex items-center gap-2">
                                       <button
                                         type="button"
-                                        onClick={() => handleClickNoteLock(note)}
-                                        className={`px-3 py-1 text-xs font-bold rounded-xl cursor-pointer ${
-                                          isBlueFeatured
-                                            ? 'bg-white text-[#1273FF]'
-                                            : 'bg-[#1273FF] text-white'
-                                        }`}
+                                        onClick={() => handleSaveEdit(note)}
+                                        className="px-3 py-1 text-xs font-bold bg-[#1273FF] text-white rounded-xl cursor-pointer shadow-xs"
                                       >
-                                        Unlock
+                                        Save
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditingNoteId(null)}
+                                        className="px-3 py-1 text-xs font-semibold border border-blue-300 text-slate-700 dark:text-slate-200 bg-white/80 dark:bg-slate-800 rounded-xl cursor-pointer"
+                                      >
+                                        Cancel
                                       </button>
                                     </div>
-                                  ) : isEditingThis ? (
-                                    <div className="space-y-2 text-slate-900">
-                                      <input
-                                        type="text"
-                                        value={editTitle}
-                                        onChange={(e) => setEditTitle(e.target.value)}
-                                        className="w-full px-3 py-1.5 text-sm font-semibold bg-white dark:bg-slate-900 dark:text-white border border-blue-200 rounded-xl"
-                                      />
-                                      <textarea
-                                        rows={3}
-                                        value={editContent}
-                                        onChange={(e) => setEditContent(e.target.value)}
-                                        className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 dark:text-white border border-blue-200 rounded-xl resize-none"
-                                      />
-                                      <div className="flex items-center gap-2">
-                                        <button
-                                          type="button"
-                                          onClick={() => handleSaveEdit(note)}
-                                          className="px-3 py-1 text-xs font-bold bg-white text-[#1273FF] rounded-xl cursor-pointer shadow-xs"
-                                        >
-                                          Save
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => setEditingNoteId(null)}
-                                          className="px-3 py-1 text-xs font-semibold border border-white/60 text-white rounded-xl cursor-pointer"
-                                        >
-                                          Cancel
-                                        </button>
+                                  </div>
+                                ) : (
+                                  <div className="space-y-3">
+                                    <div className="flex items-start gap-2.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleCompleted(note)}
+                                        className="mt-0.5 cursor-pointer text-slate-600 hover:text-[#1273FF]"
+                                      >
+                                        {note.isCompleted ? (
+                                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                                        ) : (
+                                          <Circle className="w-4 h-4" />
+                                        )}
+                                      </button>
+                                      <div className="flex-1 min-w-0">
+                                        <p className="text-sm whitespace-pre-wrap leading-relaxed text-slate-900 dark:text-slate-100">
+                                          {note.content}
+                                        </p>
                                       </div>
                                     </div>
-                                  ) : (
-                                    <div className="space-y-3">
-                                      <div className="flex items-start gap-2.5">
-                                        <button
-                                          type="button"
-                                          onClick={() => handleToggleCompleted(note)}
-                                          className={`mt-0.5 cursor-pointer ${
-                                            isBlueFeatured
-                                              ? 'text-white/90'
-                                              : 'text-slate-400 hover:text-[#1273FF]'
-                                          }`}
-                                        >
-                                          {note.isCompleted ? (
-                                            <CheckCircle2 className="w-4 h-4 text-emerald-300" />
-                                          ) : (
-                                            <Circle className="w-4 h-4" />
-                                          )}
-                                        </button>
-                                        <div className="flex-1 min-w-0">
-                                          <p
-                                            className={`text-sm whitespace-pre-wrap leading-relaxed ${
-                                              isBlueFeatured
-                                                ? 'text-white/95'
-                                                : 'text-slate-700 dark:text-slate-300'
-                                            }`}
-                                          >
-                                            {note.content}
-                                          </p>
-                                        </div>
-                                      </div>
 
-                                      {/* Reminder Button (5min, 15min, 30min, set timer) + Alert + Small File Boxes */}
-                                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                                        <div className="flex flex-wrap items-center gap-1.5">
-                                          {note.attachments.map((att) => (
-                                            <div
-                                              key={att.id}
-                                              className="relative group w-8 h-8 rounded-full border-2 border-white dark:border-slate-700 bg-white dark:bg-slate-900 flex items-center justify-center overflow-hidden shrink-0 shadow-xs"
-                                            >
+                                    {/* Upper Controls Row on Note: "Take photo" + "Set Reminder" + "voice" with Play & Pause Beside It */}
+                                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenTakePhoto(note.id)}
+                                        title="Take photo"
+                                        className="flex items-center gap-1 px-2.5 py-1 rounded-xl border border-blue-300 bg-white/85 dark:bg-slate-800 text-xs font-semibold text-[#1273FF] cursor-pointer"
+                                      >
+                                        <Camera className="w-3.5 h-3.5" />
+                                        <span>Take photo</span>
+                                      </button>
+
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        {/* Set Reminder Button on Note */}
+                                        <div className="relative">
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setOpenNoteReminderMenuId((prev) =>
+                                                prev === note.id ? null : note.id
+                                              )
+                                            }
+                                            className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-xl cursor-pointer bg-white/90 dark:bg-slate-800 border border-blue-200 dark:border-slate-700 text-slate-700 dark:text-slate-200"
+                                          >
+                                            <Clock className="w-3 h-3 text-[#1273FF]" />
+                                            <span>Set Reminder</span>
+                                          </button>
+
+                                          {openNoteReminderMenuId === note.id && (
+                                            <div className="absolute right-0 mt-1 w-32 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-blue-100 dark:border-slate-700 rounded-xl shadow-lg py-1 z-20">
                                               <button
                                                 type="button"
-                                                onClick={() => handleOpenAttachment(att)}
-                                                className="w-full h-full flex items-center justify-center cursor-pointer"
-                                                title={att.name}
+                                                onClick={() =>
+                                                  handleSelectNoteReminderPreset(note, 5)
+                                                }
+                                                className="w-full text-left px-3 py-1 text-xs hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
                                               >
-                                                {att.kind === 'image' && att.previewDataUrl ? (
-                                                  <img
-                                                    src={att.previewDataUrl}
-                                                    alt={att.name}
-                                                    referrerPolicy="no-referrer"
-                                                    className="w-full h-full object-cover"
-                                                  />
-                                                ) : (
-                                                  <FileText className="w-3.5 h-3.5 text-[#1273FF]" />
-                                                )}
+                                                5min
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  handleSelectNoteReminderPreset(note, 15)
+                                                }
+                                                className="w-full text-left px-3 py-1 text-xs hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
+                                              >
+                                                15min
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  handleSelectNoteReminderPreset(note, 30)
+                                                }
+                                                className="w-full text-left px-3 py-1 text-xs hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
+                                              >
+                                                30min
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  setCustomTimerNoteId(note.id);
+                                                  setOpenNoteReminderMenuId(null);
+                                                }}
+                                                className="w-full text-left px-3 py-1 text-xs font-semibold text-[#1273FF] hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer border-t border-blue-50 dark:border-slate-800"
+                                              >
+                                                Set timer
                                               </button>
                                             </div>
-                                          ))}
-                                          <label
-                                            title="Add file"
-                                            className={`w-8 h-8 rounded-full border border-dashed flex items-center justify-center cursor-pointer ${
-                                              isBlueFeatured
-                                                ? 'border-white/70 text-white'
-                                                : 'border-blue-300 text-[#1273FF]'
-                                            }`}
-                                          >
-                                            <Plus className="w-3.5 h-3.5" />
-                                            <input
-                                              type="file"
-                                              multiple
-                                              accept="image/*,.pdf,.txt,.doc,.docx,.csv,.md,.json"
-                                              onChange={(e) => handleNoteFilesUpload(note.id, e)}
-                                              className="hidden"
-                                            />
-                                          </label>
+                                          )}
                                         </div>
 
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          {/* Reminder Button on Note */}
-                                          <div className="relative">
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                setOpenNoteReminderMenuId((prev) =>
-                                                  prev === note.id ? null : note.id
-                                                )
-                                              }
-                                              className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-xl cursor-pointer ${
-                                                isBlueFeatured
-                                                  ? 'bg-white/20 text-white'
-                                                  : 'bg-white dark:bg-slate-800 border border-blue-100 text-slate-700 dark:text-slate-200'
-                                              }`}
-                                            >
-                                              <Clock className="w-3 h-3" />
-                                              <span>Reminder</span>
-                                            </button>
-
-                                            {openNoteReminderMenuId === note.id && (
-                                              <div className="absolute right-0 mt-1 w-32 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-blue-100 dark:border-slate-700 rounded-xl shadow-lg py-1 z-20">
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    handleSelectNoteReminderPreset(note, 5)
-                                                  }
-                                                  className="w-full text-left px-3 py-1 text-xs hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
-                                                >
-                                                  5min
-                                                </button>
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    handleSelectNoteReminderPreset(note, 15)
-                                                  }
-                                                  className="w-full text-left px-3 py-1 text-xs hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
-                                                >
-                                                  15min
-                                                </button>
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    handleSelectNoteReminderPreset(note, 30)
-                                                  }
-                                                  className="w-full text-left px-3 py-1 text-xs hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
-                                                >
-                                                  30min
-                                                </button>
-                                                <button
-                                                  type="button"
-                                                  onClick={() => {
-                                                    setCustomTimerNoteId(note.id);
-                                                    setOpenNoteReminderMenuId(null);
-                                                  }}
-                                                  className="w-full text-left px-3 py-1 text-xs font-semibold text-[#1273FF] hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer border-t border-blue-50 dark:border-slate-800"
-                                                >
-                                                  Set timer
-                                                </button>
-                                              </div>
-                                            )}
-                                          </div>
-
-                                          {/* Small Alert (voice, text, off) */}
-                                          <div
-                                            className={`inline-flex items-center p-0.5 rounded-xl gap-0.5 ${
-                                              isBlueFeatured
-                                                ? 'bg-white/20'
-                                                : 'bg-blue-50 dark:bg-slate-800 border border-blue-100 dark:border-slate-700'
+                                        {/* "voice" button + Play & Pause buttons beside it ("text" and "off" removed) */}
+                                        <div className="inline-flex items-center p-0.5 rounded-xl gap-1 bg-white/85 dark:bg-slate-800 border border-blue-200 dark:border-slate-700">
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              handleSetNoteAlertMode(
+                                                note,
+                                                note.alertMode === 'voice' ? 'off' : 'voice'
+                                              )
+                                            }
+                                            className={`px-2 py-0.5 text-xs font-semibold rounded-lg cursor-pointer ${
+                                              note.alertMode === 'voice'
+                                                ? 'bg-[#1273FF] text-white'
+                                                : 'text-slate-600 dark:text-slate-400'
                                             }`}
                                           >
-                                            {(['voice', 'text', 'off'] as AlertMode[]).map(
-                                              (mode) => (
-                                                <button
-                                                  key={mode}
-                                                  type="button"
-                                                  onClick={() => handleSetNoteAlertMode(note, mode)}
-                                                  className={`px-2 py-0.5 text-xs font-semibold rounded-lg cursor-pointer ${
-                                                    note.alertMode === mode
-                                                      ? isBlueFeatured
-                                                        ? 'bg-white text-[#1273FF]'
-                                                        : 'bg-[#1273FF] text-white'
-                                                      : isBlueFeatured
-                                                      ? 'text-white/80'
-                                                      : 'text-slate-600 dark:text-slate-400'
-                                                  }`}
-                                                >
-                                                  {mode}
-                                                </button>
-                                              )
-                                            )}
-                                          </div>
-
-                                          {customTimerNoteId === note.id && (
-                                            <input
-                                              type="datetime-local"
-                                              value={note.reminderTime}
-                                              onChange={(e) =>
-                                                handleUpdateNoteReminderTime(note, e.target.value)
-                                              }
-                                              className="px-2 py-0.5 text-xs font-mono text-slate-900 bg-white border border-blue-200 rounded-lg"
-                                            />
-                                          )}
-
+                                            voice
+                                          </button>
                                           <button
                                             type="button"
                                             onClick={() => handleSpeakNoteNow(note)}
-                                            className={`px-2.5 py-0.5 text-xs font-semibold rounded-lg cursor-pointer ${
-                                              isBlueFeatured
-                                                ? 'bg-white/20 text-white'
-                                                : 'border border-blue-200 text-[#1273FF]'
+                                            title="Play voice"
+                                            aria-label="Play voice"
+                                            className={`p-1 rounded-lg cursor-pointer ${
+                                              isSpeakingThis && !isSpeechPaused
+                                                ? 'bg-[#1273FF] text-white'
+                                                : 'text-[#1273FF] hover:bg-blue-50 dark:hover:bg-slate-700'
                                             }`}
                                           >
-                                            {isSpeakingThis ? 'Stop' : 'Voice'}
+                                            <Play className="w-3.5 h-3.5 fill-current" />
                                           </button>
                                           <button
                                             type="button"
-                                            onClick={() => handleStartEdit(note)}
-                                            className={`p-1 cursor-pointer ${
-                                              isBlueFeatured
-                                                ? 'text-white/90 hover:text-white'
-                                                : 'text-slate-500 hover:text-slate-900'
+                                            onClick={() => handlePauseNoteVoice(note)}
+                                            title="Pause voice"
+                                            aria-label="Pause voice"
+                                            className={`p-1 rounded-lg cursor-pointer ${
+                                              isSpeakingThis && isSpeechPaused
+                                                ? 'bg-[#1273FF] text-white'
+                                                : 'text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-700'
                                             }`}
                                           >
-                                            <Edit3 className="w-3.5 h-3.5" />
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => handleDeleteNote(note)}
-                                            className={`p-1 cursor-pointer ${
-                                              isBlueFeatured
-                                                ? 'text-white/90 hover:text-red-200'
-                                                : 'text-slate-500 hover:text-red-600'
-                                            }`}
-                                          >
-                                            <Trash2 className="w-3.5 h-3.5" />
+                                            <Pause className="w-3.5 h-3.5" />
                                           </button>
                                         </div>
+
+                                        {customTimerNoteId === note.id && (
+                                          <input
+                                            type="datetime-local"
+                                            value={note.reminderTime}
+                                            onChange={(e) =>
+                                              handleUpdateNoteReminderTime(note, e.target.value)
+                                            }
+                                            className="px-2 py-0.5 text-xs font-mono text-slate-900 bg-white border border-blue-200 rounded-lg"
+                                          />
+                                        )}
                                       </div>
                                     </div>
-                                  )}
-                                </div>
-                              )}
 
-                              {/* Bottom of Note: Small Date */}
-                              <div
-                                className={`pt-2 flex items-center justify-between text-xs font-mono tabular-nums ${
-                                  isBlueFeatured ? 'text-blue-100' : 'text-slate-400'
-                                }`}
-                              >
-                                <span>{formatReadableDateTime(note.updatedAtMs)}</span>
-                                {note.alertMode !== 'off' && note.reminderTime && (
-                                  <span>Reminder: {formatReadableTime(note.reminderTime)}</span>
+                                    {/* Bottom Row on Note: Attachments on Left + "File" on Right Side */}
+                                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-blue-200/60 dark:border-slate-700">
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        {note.attachments.map((att) => (
+                                          <div
+                                            key={att.id}
+                                            className="relative group w-8 h-8 rounded-full border-2 border-white dark:border-slate-700 bg-white dark:bg-slate-900 flex items-center justify-center overflow-hidden shrink-0 shadow-xs"
+                                          >
+                                            <button
+                                              type="button"
+                                              onClick={() => handleOpenAttachment(att)}
+                                              className="w-full h-full flex items-center justify-center cursor-pointer"
+                                              title={att.name}
+                                            >
+                                              {att.kind === 'image' && att.previewDataUrl ? (
+                                                <img
+                                                  src={att.previewDataUrl}
+                                                  alt={att.name}
+                                                  referrerPolicy="no-referrer"
+                                                  className="w-full h-full object-cover"
+                                                />
+                                              ) : (
+                                                <FileText className="w-3.5 h-3.5 text-[#1273FF]" />
+                                              )}
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+
+                                      <div className="flex items-center gap-2 ml-auto">
+                                        <label
+                                          title="Add file"
+                                          className="flex items-center gap-1 px-2.5 py-1 rounded-xl border border-dashed border-blue-300 bg-white/85 dark:bg-slate-800 text-xs font-semibold text-[#1273FF] cursor-pointer"
+                                        >
+                                          <Plus className="w-3 h-3" />
+                                          <span>File</span>
+                                          <input
+                                            type="file"
+                                            multiple
+                                            accept="image/*,.pdf,.txt,.doc,.docx,.csv,.md,.json"
+                                            onChange={(e) => handleNoteFilesUpload(note.id, e)}
+                                            className="hidden"
+                                          />
+                                        </label>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => handleStartEdit(note)}
+                                          className="p-1 cursor-pointer text-slate-700 hover:text-slate-950 dark:text-slate-300"
+                                        >
+                                          <Edit3 className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteNote(note)}
+                                          className="p-1 cursor-pointer text-slate-700 hover:text-red-600 dark:text-slate-300"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
                                 )}
                               </div>
-                            </article>
-                          </div>
-                        </React.Fragment>
+                            )}
+
+                            {/* Bottom of Note: Small Date */}
+                            <div className="pt-2 flex items-center justify-between text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300">
+                              <span>{formatReadableDateTime(note.updatedAtMs)}</span>
+                              {note.alertMode !== 'off' && note.reminderTime && (
+                                <span>Reminder: {formatReadableTime(note.reminderTime)}</span>
+                              )}
+                            </div>
+                          </article>
+                        </div>
                       );
                     })}
                   </div>
@@ -2812,6 +3238,236 @@ export default function App() {
                 type="button"
                 onClick={() => setInspectingEncryptedNote(null)}
                 className="px-3.5 py-1.5 text-xs font-bold bg-[#1273FF] text-white rounded-xl cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAKE PHOTO CAMERA MODAL */}
+      {cameraModalTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#0D1B38] border border-blue-100 dark:border-slate-700 rounded-2xl max-w-md w-full p-5 space-y-3.5 shadow-xl">
+            <div className="flex items-center justify-between border-b border-blue-100 dark:border-slate-800 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Camera className="w-4 h-4 text-[#1273FF]" />
+                <h3 className="text-sm font-bold text-slate-950 dark:text-white">
+                  Take Photo
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseTakePhoto}
+                className="p-1 text-slate-500 hover:text-slate-900 dark:text-slate-300 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {cameraError ? (
+              <div className="p-4 rounded-xl bg-blue-50/70 dark:bg-slate-900 text-center space-y-3">
+                <p className="text-xs text-slate-600 dark:text-slate-300">{cameraError}</p>
+                <label className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-[#1273FF] text-white rounded-xl cursor-pointer">
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>Choose / Capture Photo</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={async (e) => {
+                      const target = cameraModalTarget;
+                      handleCloseTakePhoto();
+                      if (target === 'composer') {
+                        await handleComposerFilesUpload(e);
+                      } else if (target) {
+                        await handleNoteFilesUpload(target, e);
+                      }
+                    }}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="relative rounded-xl overflow-hidden bg-slate-950 aspect-video flex items-center justify-center">
+                  <video
+                    ref={videoRef}
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCloseTakePhoto}
+                    className="px-3.5 py-1.5 text-xs font-semibold border border-blue-200 dark:border-slate-700 rounded-xl cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCapturePhotoFrame}
+                    className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold bg-[#1273FF] text-white rounded-xl shadow-sm cursor-pointer"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>Capture Photo</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* YOUR LAST TASKS & GEMINI AI AUTO NOTIFICATIONS MODAL */}
+      {showLastTasksModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#0D1B38] border border-blue-100 dark:border-slate-700 rounded-2xl max-w-lg w-full p-5 space-y-4 shadow-2xl max-h-[82vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-blue-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <ListTodo className="w-5 h-5 text-[#1273FF]" />
+                <div>
+                  <h3 className="text-base font-bold text-slate-950 dark:text-white">
+                    Your Last Tasks
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Gemini AI Auto Notifications from your written notes
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => generateAiTaskNotifications(notes, true)}
+                  disabled={isLoadingAiTasks}
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold bg-blue-50 dark:bg-slate-800 text-[#1273FF] dark:text-blue-300 border border-blue-200 dark:border-slate-700 rounded-xl cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>{isLoadingAiTasks ? 'Analyzing...' : 'Auto Notify'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowLastTasksModal(false)}
+                  className="p-1 text-slate-500 hover:text-slate-900 dark:text-slate-300 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+              {isLoadingAiTasks ? (
+                <div className="p-6 text-center space-y-2 schedule-card-light rounded-2xl">
+                  <Sparkles className="w-6 h-6 text-[#1273FF] mx-auto animate-spin" />
+                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                    Creating auto notifications from your written notes...
+                  </p>
+                </div>
+              ) : aiTaskNotifications.length === 0 ? (
+                <div className="p-6 text-center schedule-card-light rounded-2xl">
+                  <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    No written tasks yet. Write and save a note to get AI auto notifications.
+                  </p>
+                </div>
+              ) : (
+                aiTaskNotifications.map((item, idx) => {
+                  const matchedNote = notes.find((n) => n.id === item.noteId);
+                  return (
+                    <div
+                      key={`${item.noteId}_${idx}`}
+                      className="p-4 rounded-2xl schedule-card-light border border-[#A6CEFF] dark:border-slate-700 space-y-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-bold text-slate-950 dark:text-white truncate">
+                              {item.taskTitle}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded-md ${
+                                item.urgency === 'high'
+                                  ? 'bg-red-500 text-white'
+                                  : item.urgency === 'medium'
+                                  ? 'bg-[#1273FF] text-white'
+                                  : 'bg-emerald-600 text-white'
+                              }`}
+                            >
+                              {item.urgency}
+                            </span>
+                          </div>
+                          <p className="text-xs sm:text-sm text-slate-800 dark:text-slate-100 mt-1 leading-relaxed">
+                            {item.notificationMessage}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-blue-200/70 dark:border-slate-700">
+                        <div className="inline-flex items-center p-0.5 rounded-xl gap-1 bg-white/85 dark:bg-slate-800 border border-blue-200 dark:border-slate-700">
+                          <span className="px-2 py-0.5 text-xs font-semibold text-[#1273FF]">
+                            voice
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsSpeechPaused(false);
+                              setSpeakingNoteId(`ai_${item.noteId}`);
+                              announceVoiceReminder(
+                                item.taskTitle,
+                                item.notificationMessage,
+                                matchedNote?.language || 'en-IN',
+                                () => setSpeakingNoteId(`ai_${item.noteId}`),
+                                () => setSpeakingNoteId(null)
+                              );
+                            }}
+                            title="Play AI task voice"
+                            className="p-1 rounded-lg text-[#1273FF] hover:bg-blue-50 cursor-pointer"
+                          >
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              pauseVoiceAnnouncement();
+                              setIsSpeechPaused(true);
+                            }}
+                            title="Pause AI task voice"
+                            className="p-1 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-blue-50 cursor-pointer"
+                          >
+                            <Pause className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {matchedNote && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleSelectNoteReminderPreset(
+                                matchedNote,
+                                item.suggestedMinutes || 15
+                              );
+                              setActiveAiAutoNotice(item);
+                            }}
+                            className="flex items-center gap-1 px-3 py-1 text-xs font-bold bg-[#1273FF] text-white rounded-xl cursor-pointer shadow-xs"
+                          >
+                            <Clock className="w-3 h-3" />
+                            <span>Set Reminder ({item.suggestedMinutes || 15}m)</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-blue-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowLastTasksModal(false)}
+                className="px-4 py-1.5 text-xs font-bold bg-[#1273FF] text-white rounded-xl cursor-pointer"
               >
                 Close
               </button>

@@ -19,35 +19,64 @@
   font-variant-numeric: tabular-nums;
 }
 
-.schedule-card-light {
-  background-color: rgba(255, 255, 255, 0.78);
+/* Fresh Note Box & Title Background WITH Diagonal Cross Lines */
+.fresh-note-crosslines {
+  background-color: #dfeeff;
   background-image: repeating-linear-gradient(
     -45deg,
-    rgba(18, 115, 255, 0.03) 0px,
-    rgba(18, 115, 255, 0.03) 10px,
-    transparent 10px,
-    transparent 20px
+    rgba(255, 255, 255, 0.55) 0px,
+    rgba(255, 255, 255, 0.55) 8px,
+    rgba(18, 115, 255, 0.06) 8px,
+    rgba(18, 115, 255, 0.06) 16px
   );
+}
+
+.dark .fresh-note-crosslines {
+  background-color: #13274a;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.03) 0px,
+    rgba(255, 255, 255, 0.03) 8px,
+    rgba(18, 115, 255, 0.1) 8px,
+    rgba(18, 115, 255, 0.1) 16px
+  );
+}
+
+.title-crosslines {
+  background-color: #eef6ff;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.78) 0px,
+    rgba(255, 255, 255, 0.78) 6px,
+    rgba(18, 115, 255, 0.06) 6px,
+    rgba(18, 115, 255, 0.06) 12px
+  );
+}
+
+.dark .title-crosslines {
+  background-color: #0f203c;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.03) 0px,
+    rgba(255, 255, 255, 0.03) 6px,
+    rgba(18, 115, 255, 0.12) 6px,
+    rgba(18, 115, 255, 0.12) 12px
+  );
+}
+
+/* Previous Notes: Solid Slightly Darker Light Blue (No Cross Lines) */
+.schedule-card-light {
+  background-color: #cbe2ff;
 }
 
 .dark .schedule-card-light {
-  background-color: rgba(17, 29, 56, 0.85);
-  background-image: repeating-linear-gradient(
-    -45deg,
-    rgba(255, 255, 255, 0.025) 0px,
-    rgba(255, 255, 255, 0.025) 10px,
-    transparent 10px,
-    transparent 20px
-  );
+  background-color: #19325c;
 }
 
-.schedule-card-blue {
-  background-color: #1273ff;
-  background-image: repeating-linear-gradient(
-    -45deg,
-    rgba(255, 255, 255, 0.09) 0px,
-    rgba(255, 255, 255, 0.09) 12px,
-    transparent 12px,
-    transparent 24px
-  );
+.schedule-card-light-active {
+  background-color: #b5d4ff;
+}
+
+.dark .schedule-card-light-active {
+  background-color: #224278;
 }

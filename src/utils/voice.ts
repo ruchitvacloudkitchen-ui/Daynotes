@@ -129,6 +129,22 @@ export async function announceVoiceReminder(
   window.speechSynthesis.speak(utterance);
 }
 
+export function pauseVoiceAnnouncement(): void {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+      window.speechSynthesis.pause();
+    }
+  }
+}
+
+export function resumeVoiceAnnouncement(): void {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    }
+  }
+}
+
 export function stopVoiceAnnouncement(): void {
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     window.speechSynthesis.cancel();
