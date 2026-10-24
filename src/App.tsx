@@ -7,7 +7,6 @@ import {
   Lock,
   Unlock,
   Volume2,
-  VolumeX,
   Plus,
   Trash2,
   FileText,
@@ -18,7 +17,6 @@ import {
   Cloud,
   CloudOff,
   HardDrive,
-  Eye,
   X,
   CheckCircle2,
   Circle,
@@ -33,6 +31,7 @@ import {
   Check,
   ScrollText,
   Clock,
+  MoreVertical,
 } from 'lucide-react';
 import {
   signInWithPopup,
@@ -178,6 +177,17 @@ function formatReadableDateTime(ms: number): string {
   });
 }
 
+function formatTimelineHour(note: DayNoteItem): string {
+  if (note.reminderTime) {
+    const dt = new Date(note.reminderTime);
+    if (!Number.isNaN(dt.getTime())) {
+      return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+  }
+  const created = new Date(note.updatedAtMs || note.createdAtMs);
+  return created.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 function formatReadableTime(isoLocal: string): string {
   if (!isoLocal) return 'No time';
   const dt = new Date(isoLocal);
@@ -222,7 +232,9 @@ export default function App() {
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showPreviousNotes, setShowPreviousNotes] = useState(true);
   const [expandedNoteId, setExpandedNoteId] = useState<string | null>(null);
+  const [selectedDayOffset, setSelectedDayOffset] = useState<number>(0);
   const previousNotesRef = useRef<HTMLDivElement | null>(null);
+  const composerTitleInputRef = useRef<HTMLInputElement | null>(null);
 
   // --- Reminder Dropdown State (5min, 15min, 30min, set timer) ---
   const [showComposerReminderMenu, setShowComposerReminderMenu] = useState(false);
@@ -252,9 +264,9 @@ export default function App() {
   const [composerTitle, setComposerTitle] = useState('');
   const [composerContent, setComposerContent] = useState('');
   const [composerLanguage, setComposerLanguage] = useState<SupportedLanguage>('en-IN');
-  const [composerEncrypted, setComposerEncrypted] = useState<boolean>(true);
+  const [composerEncrypted] = useState<boolean>(true);
   const [composerAlertMode, setComposerAlertMode] = useState<AlertMode>('off');
-  const [composerImportance, setComposerImportance] = useState<ImportanceColor>('red');
+  const [composerImportance, setComposerImportance] = useState<ImportanceColor>('blue');
   const [composerReminderTime, setComposerReminderTime] = useState<string>(() =>
     formatLocalDatetimeInput(5)
   );
@@ -291,6 +303,35 @@ export default function App() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
+
+  // --- 5-Day Schedule Pill Strip (Centered around Today) ---
+  const scheduleDays = useMemo(() => {
+    const today = new Date();
+    const offsets = [-1, 0, 1, 2, 3];
+    return offsets.map((offset) => {
+      const dt = new Date(today);
+      dt.setDate(today.getDate() + offset);
+      const dayLabel = dt
+        .toLocaleDateString('en-US', { weekday: 'short' })
+        .toUpperCase();
+      const dateNum = dt.getDate();
+      return {
+        offset,
+        dayLabel,
+        dateNum,
+        fullDate: dt,
+      };
+    });
+  }, []);
+
+  const currentMonthYear = useMemo(() => {
+    const base = new Date();
+    base.setDate(base.getDate() + selectedDayOffset);
+    return {
+      month: base.toLocaleDateString('en-US', { month: 'short' }),
+      year: base.getFullYear(),
+    };
+  }, [selectedDayOffset]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -941,39 +982,6 @@ export default function App() {
     await persistNotesUpdate(updatedList, changedNote, 'Added file');
   };
 
-  const handleRemoveNoteAttachment = async (noteId: string, attachmentId: string) => {
-    const targetNote = notes.find((n) => n.id === noteId);
-    if (!targetNote) return;
-
-    await deleteAttachmentFromIdb(attachmentId);
-    const updatedAttachments = targetNote.attachments.filter((a) => a.id !== attachmentId);
-    let encryptedPayload = targetNote.encryptedPayload;
-    if (targetNote.isEncrypted) {
-      encryptedPayload = await encryptNoteFields(
-        {
-          title: targetNote.title,
-          content: targetNote.content,
-          attachmentsSummary: JSON.stringify(updatedAttachments),
-          alertMode: targetNote.alertMode,
-          importance: targetNote.importance,
-          pinCode: targetNote.pinCode,
-          isPinLocked: targetNote.isPinLocked,
-        },
-        vaultPassphrase
-      );
-    }
-
-    const changedNote: DayNoteItem = {
-      ...targetNote,
-      attachments: updatedAttachments,
-      encryptedPayload,
-      updatedAtMs: Date.now(),
-    };
-
-    const updatedList = notes.map((n) => (n.id === noteId ? changedNote : n));
-    await persistNotesUpdate(updatedList, changedNote, 'Removed file');
-  };
-
   const handleOpenAttachment = async (attachment: NoteAttachment) => {
     const fullFromIdb = await getFullAttachmentFromIdb(attachment.id);
     setPreviewAttachment({
@@ -1302,9 +1310,9 @@ export default function App() {
   }, [notes]);
 
   return (
-    <div className="min-h-screen bg-neutral-50 dark:bg-[#0B0F17] text-neutral-900 dark:text-neutral-100 transition-colors duration-150 flex flex-col">
+    <div className="min-h-screen bg-gradient-to-br from-[#F3F8FF] via-[#E6F1FF] to-[#D6E8FF] dark:from-[#071022] dark:via-[#0B1833] dark:to-[#0F2147] text-slate-900 dark:text-slate-100 transition-colors duration-150 flex flex-col">
       {/* TOP BAR: SIMPLE "DN" ICON + "Daynote" (Only D capital) + TAGLINE + SMALL GOOGLE SYMBOL + 3-LINE MENU */}
-      <header className="flex items-center justify-between gap-4 px-5 py-3 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-[#111827] sticky top-0 z-30">
+      <header className="flex items-center justify-between gap-4 px-5 py-3.5 border-b border-white/70 dark:border-slate-800/80 bg-white/70 dark:bg-[#0B1730]/80 backdrop-blur-md sticky top-0 z-30">
         {/* Zone 1: Simple DN Icon + "Daynote" + Tagline */}
         <div className="flex items-center gap-3 min-w-0">
           <a
@@ -1317,22 +1325,22 @@ export default function App() {
             }}
             className="flex items-center gap-2.5 shrink-0"
           >
-            <span className="w-8 h-8 rounded-lg bg-neutral-900 dark:bg-blue-600 text-white text-sm font-bold flex items-center justify-center tracking-tight shrink-0">
+            <span className="w-9 h-9 rounded-xl bg-[#1273FF] text-white text-sm font-bold flex items-center justify-center tracking-tight shadow-sm shadow-blue-500/30 shrink-0">
               DN
             </span>
-            <span className="text-xl font-bold tracking-tight text-neutral-950 dark:text-white whitespace-nowrap">
+            <span className="text-xl font-bold tracking-tight text-slate-950 dark:text-white whitespace-nowrap">
               Daynote
             </span>
           </a>
-          <span className="text-sm font-medium text-neutral-500 dark:text-neutral-400 truncate hidden sm:inline">
-            Speak · Note · Remind
+          <span className="text-sm font-medium text-slate-500 dark:text-slate-300 truncate hidden sm:inline">
+            Time flies! Let’s enjoy the plans ahead today!
           </span>
         </div>
 
         {/* Zone 2: Active Folder Indicator */}
-        <div className="hidden md:flex items-center gap-3 text-sm font-medium text-neutral-600 dark:text-neutral-400">
+        <div className="hidden md:flex items-center gap-3 text-sm font-semibold text-[#1273FF] dark:text-blue-400">
           {selectedColorFolder !== 'all' && (
-            <span className="font-semibold">
+            <span>
               {COLOR_FOLDERS.find((f) => f.id === selectedColorFolder)?.folderName}
             </span>
           )}
@@ -1344,10 +1352,10 @@ export default function App() {
             type="button"
             onClick={handleGoogleAuth}
             title={user ? `Google Synced (${user.email}) — Click to Sign Out` : 'Sync with Google'}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-colors cursor-pointer ${
               user
-                ? 'border-emerald-300 bg-emerald-50/70 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
-                : 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100'
+                ? 'border-blue-300 bg-blue-50/90 text-[#1273FF] dark:border-blue-800 dark:bg-blue-950/60 dark:text-blue-300'
+                : 'border-white/90 dark:border-slate-700 bg-white/90 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-white shadow-xs'
             }`}
           >
             <GoogleSymbol className="w-4 h-4 shrink-0" />
@@ -1358,7 +1366,7 @@ export default function App() {
             type="button"
             onClick={() => setShowMoreMenu((v) => !v)}
             aria-label="Open More Menu"
-            className="p-2 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors cursor-pointer"
+            className="p-2 rounded-xl border border-white/90 dark:border-slate-700 bg-white/90 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-white transition-colors shadow-xs cursor-pointer"
           >
             <Menu className="w-5 h-5" />
           </button>
@@ -1367,15 +1375,15 @@ export default function App() {
 
       {/* TOP-RIGHT 3-LINE MORE MENU DRAWER */}
       {showMoreMenu && (
-        <div className="fixed inset-0 z-40 bg-black/40 flex justify-end">
-          <div className="w-72 bg-white dark:bg-[#111827] border-l border-neutral-200 dark:border-neutral-800 h-full p-5 flex flex-col justify-between overflow-y-auto shadow-2xl">
+        <div className="fixed inset-0 z-40 bg-slate-950/40 backdrop-blur-xs flex justify-end">
+          <div className="w-72 bg-gradient-to-b from-[#F5FAFF] to-[#E6F1FF] dark:from-[#0D1B38] dark:to-[#091326] border-l border-white/80 dark:border-slate-800 h-full p-5 flex flex-col justify-between overflow-y-auto shadow-2xl">
             <div className="space-y-6">
-              <div className="flex items-center justify-between pb-3 border-b border-neutral-200 dark:border-neutral-800">
-                <span className="text-base font-bold text-neutral-900 dark:text-white">Menu</span>
+              <div className="flex items-center justify-between pb-3 border-b border-blue-200/60 dark:border-slate-800">
+                <span className="text-base font-bold text-slate-900 dark:text-white">Menu</span>
                 <button
                   type="button"
                   onClick={() => setShowMoreMenu(false)}
-                  className="p-1 text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white rounded cursor-pointer"
+                  className="p-1 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white rounded cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -1383,7 +1391,7 @@ export default function App() {
 
               {/* 1. Languages */}
               <div className="space-y-2">
-                <p className="text-xs font-semibold text-neutral-500 dark:text-neutral-400 px-1">
+                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-1">
                   Languages
                 </p>
                 <div className="grid grid-cols-2 gap-1.5">
@@ -1393,10 +1401,10 @@ export default function App() {
                       setLanguageFilter('all');
                       setShowMoreMenu(false);
                     }}
-                    className={`px-3 py-1.5 text-sm font-medium rounded border transition-colors cursor-pointer ${
+                    className={`px-3 py-1.5 text-sm font-semibold rounded-xl border transition-colors cursor-pointer ${
                       languageFilter === 'all'
-                        ? 'border-blue-600 bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-                        : 'border-neutral-200 dark:border-neutral-800 text-neutral-700 dark:text-neutral-300'
+                        ? 'border-[#1273FF] bg-[#1273FF] text-white shadow-sm'
+                        : 'border-white/80 bg-white/70 dark:bg-slate-800/80 dark:border-slate-700 text-slate-700 dark:text-slate-300'
                     }`}
                   >
                     All
@@ -1410,10 +1418,10 @@ export default function App() {
                         setLanguageFilter(lang.code);
                         setShowMoreMenu(false);
                       }}
-                      className={`px-3 py-1.5 text-sm font-medium rounded border transition-colors cursor-pointer ${
+                      className={`px-3 py-1.5 text-sm font-semibold rounded-xl border transition-colors cursor-pointer ${
                         languageFilter === lang.code
-                          ? 'border-blue-600 bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-                          : 'border-neutral-200 dark:border-neutral-800 text-neutral-700 dark:text-neutral-300'
+                          ? 'border-[#1273FF] bg-[#1273FF] text-white shadow-sm'
+                          : 'border-white/80 bg-white/70 dark:bg-slate-800/80 dark:border-slate-700 text-slate-700 dark:text-slate-300'
                       }`}
                     >
                       {lang.label}
@@ -1424,7 +1432,7 @@ export default function App() {
 
               {/* 2. Color Folders (Red, Green, Blue, Pink) */}
               <div className="space-y-1.5">
-                <p className="text-xs font-semibold text-neutral-500 dark:text-neutral-400 px-1">
+                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-1">
                   Color Folders
                 </p>
                 <button
@@ -1434,10 +1442,10 @@ export default function App() {
                     setSelectedColorFolder('all');
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3.5 py-2 text-sm font-semibold rounded-xl transition-colors cursor-pointer ${
                     activeSection === 'notes' && selectedColorFolder === 'all'
-                      ? 'bg-neutral-900 text-white dark:bg-blue-600'
-                      : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                      ? 'bg-[#1273FF] text-white shadow-sm'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-800'
                   }`}
                 >
                   <span className="flex items-center gap-2">
@@ -1456,10 +1464,10 @@ export default function App() {
                       setSelectedColorFolder(folder.id);
                       setShowMoreMenu(false);
                     }}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer ${
+                    className={`w-full flex items-center justify-between px-3.5 py-2 text-sm font-semibold rounded-xl transition-colors cursor-pointer ${
                       activeSection === 'notes' && selectedColorFolder === folder.id
-                        ? 'bg-neutral-900 text-white dark:bg-blue-600'
-                        : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                        ? 'bg-[#1273FF] text-white shadow-sm'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-800'
                     }`}
                   >
                     <span className="flex items-center gap-2.5">
@@ -1472,8 +1480,8 @@ export default function App() {
               </div>
 
               {/* 3. Alerts, Files, Vault, Backups */}
-              <div className="space-y-1.5 pt-2 border-t border-neutral-200 dark:border-neutral-800">
-                <p className="text-xs font-semibold text-neutral-500 dark:text-neutral-400 px-1">
+              <div className="space-y-1.5 pt-2 border-t border-blue-200/60 dark:border-slate-800">
+                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-1">
                   Options
                 </p>
                 <button
@@ -1483,10 +1491,10 @@ export default function App() {
                     setSelectedColorFolder('all');
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3.5 py-2 text-sm font-semibold rounded-xl transition-colors cursor-pointer ${
                     activeSection === 'reminders'
-                      ? 'bg-neutral-900 text-white dark:bg-blue-600'
-                      : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                      ? 'bg-[#1273FF] text-white shadow-sm'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-800'
                   }`}
                 >
                   <span className="flex items-center gap-2">
@@ -1503,10 +1511,10 @@ export default function App() {
                     setSelectedColorFolder('all');
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3.5 py-2 text-sm font-semibold rounded-xl transition-colors cursor-pointer ${
                     activeSection === 'attachments'
-                      ? 'bg-neutral-900 text-white dark:bg-blue-600'
-                      : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                      ? 'bg-[#1273FF] text-white shadow-sm'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-800'
                   }`}
                 >
                   <span className="flex items-center gap-2">
@@ -1522,10 +1530,10 @@ export default function App() {
                     setActiveSection('vault');
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3.5 py-2 text-sm font-semibold rounded-xl transition-colors cursor-pointer ${
                     activeSection === 'vault'
-                      ? 'bg-neutral-900 text-white dark:bg-blue-600'
-                      : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                      ? 'bg-[#1273FF] text-white shadow-sm'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-800'
                   }`}
                 >
                   <span className="flex items-center gap-2">
@@ -1541,10 +1549,10 @@ export default function App() {
                     setActiveSection('backups');
                     setShowMoreMenu(false);
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3.5 py-2 text-sm font-semibold rounded-xl transition-colors cursor-pointer ${
                     activeSection === 'backups'
-                      ? 'bg-neutral-900 text-white dark:bg-blue-600'
-                      : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                      ? 'bg-[#1273FF] text-white shadow-sm'
+                      : 'text-slate-700 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-800'
                   }`}
                 >
                   <span className="flex items-center gap-2">
@@ -1557,12 +1565,12 @@ export default function App() {
             </div>
 
             {/* Menu Footer */}
-            <div className="pt-3 border-t border-neutral-200 dark:border-neutral-800 space-y-2.5">
+            <div className="pt-3 border-t border-blue-200/60 dark:border-slate-800 space-y-2.5">
               <div className="flex items-center justify-between">
                 <button
                   type="button"
                   onClick={() => setDarkMode((d) => !d)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-neutral-200 dark:border-neutral-700 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-white/80 dark:border-slate-700 rounded-xl bg-white/80 dark:bg-slate-800 text-slate-800 dark:text-slate-200 cursor-pointer"
                 >
                   {darkMode ? (
                     <>
@@ -1571,7 +1579,7 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      <Moon className="w-3.5 h-3.5 text-neutral-700" />
+                      <Moon className="w-3.5 h-3.5 text-[#1273FF]" />
                       <span>Night</span>
                     </>
                   )}
@@ -1580,16 +1588,16 @@ export default function App() {
                 <button
                   type="button"
                   onClick={handleGoogleAuth}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-neutral-200 dark:border-neutral-700 rounded bg-white dark:bg-neutral-800 text-neutral-800 dark:text-neutral-100 cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-white/80 dark:border-slate-700 rounded-xl bg-white/80 dark:bg-slate-800 text-slate-800 dark:text-slate-100 cursor-pointer"
                 >
                   <GoogleSymbol className="w-3.5 h-3.5" />
                   <span>{user ? 'Sign Out' : 'Google Sync'}</span>
                 </button>
               </div>
-              <div className="flex items-center justify-between text-xs text-neutral-500">
+              <div className="flex items-center justify-between text-xs text-slate-500">
                 <span className="flex items-center gap-1">
                   {isOnline ? (
-                    <Cloud className="w-3.5 h-3.5 text-blue-600" />
+                    <Cloud className="w-3.5 h-3.5 text-[#1273FF]" />
                   ) : (
                     <CloudOff className="w-3.5 h-3.5 text-amber-600" />
                   )}
@@ -1604,14 +1612,14 @@ export default function App() {
 
       {/* ACTIVE ALERT BANNER */}
       {activeAlertNote && (
-        <div className="bg-amber-50 dark:bg-amber-950/80 border-b border-amber-300 dark:border-amber-800 px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="bg-[#1273FF] text-white px-5 py-3 flex flex-wrap items-center justify-between gap-3 shadow-md">
           <div className="flex items-center gap-2.5">
-            <Volume2 className="w-5 h-5 text-amber-700 dark:text-amber-400 shrink-0" />
+            <Volume2 className="w-5 h-5 text-white shrink-0" />
             <div>
-              <p className="text-sm font-semibold text-amber-950 dark:text-amber-200">
+              <p className="text-sm font-bold">
                 Alert ({activeAlertNote.alertMode}): {activeAlertNote.title}
               </p>
-              <p className="text-xs text-amber-900 dark:text-amber-300/90">
+              <p className="text-xs text-blue-100">
                 {activeAlertNote.content}
               </p>
             </div>
@@ -1620,7 +1628,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => handleSpeakNoteNow(activeAlertNote)}
-              className="px-3 py-1 text-xs font-medium bg-amber-600 text-white rounded cursor-pointer"
+              className="px-3 py-1 text-xs font-semibold bg-white text-[#1273FF] rounded-lg cursor-pointer"
             >
               Speak
             </button>
@@ -1631,7 +1639,7 @@ export default function App() {
                 setSpeakingNoteId(null);
                 setActiveAlertNote(null);
               }}
-              className="px-3 py-1 text-xs font-medium border border-amber-400 text-amber-950 dark:text-amber-200 rounded cursor-pointer"
+              className="px-3 py-1 text-xs font-semibold border border-white/60 text-white rounded-lg cursor-pointer"
             >
               Close
             </button>
@@ -1640,26 +1648,26 @@ export default function App() {
       )}
 
       {/* MAIN VIEWPORT */}
-      <main className="flex-1 max-w-2xl w-full mx-auto p-4 sm:p-6 space-y-6 pb-24">
+      <main className="flex-1 max-w-2xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6 pb-24">
         {activeSection === 'vault' || activeSection === 'backups' ? (
           /* VAULT & BACKUPS VIEW */
           <div className="space-y-5">
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-neutral-200 dark:border-neutral-800">
-              <h1 className="text-lg font-bold text-neutral-950 dark:text-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-blue-200/60 dark:border-slate-800">
+              <h1 className="text-xl font-bold text-slate-950 dark:text-white">
                 {activeSection === 'vault' ? 'Vault' : 'Backups'}
               </h1>
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setActiveSection('notes')}
-                  className="px-3 py-1.5 text-xs font-medium border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-800 cursor-pointer"
+                  className="px-3 py-1.5 text-xs font-semibold border border-white/80 dark:border-slate-700 rounded-xl bg-white/80 dark:bg-slate-800 cursor-pointer"
                 >
                   Back
                 </button>
                 <button
                   type="button"
                   onClick={handleManualBackupNow}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 rounded cursor-pointer"
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-[#1273FF] text-white rounded-xl cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>Backup</span>
@@ -1667,12 +1675,12 @@ export default function App() {
                 <button
                   type="button"
                   onClick={handleExportBackupFile}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-800 cursor-pointer"
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold border border-white/80 dark:border-slate-700 rounded-xl bg-white/80 dark:bg-slate-800 cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Export</span>
                 </button>
-                <label className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold border border-neutral-300 dark:border-neutral-700 rounded bg-white dark:bg-neutral-800 cursor-pointer">
+                <label className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold border border-white/80 dark:border-slate-700 rounded-xl bg-white/80 dark:bg-slate-800 cursor-pointer">
                   <Upload className="w-3.5 h-3.5" />
                   <span>Import</span>
                   <input
@@ -1685,12 +1693,12 @@ export default function App() {
               </div>
             </div>
 
-            <section className="p-5 bg-white dark:bg-[#111827] border border-neutral-200 dark:border-neutral-800 rounded-lg space-y-3">
+            <section className="p-5 schedule-card-light backdrop-blur-md border border-white/90 dark:border-slate-800 rounded-2xl space-y-3 shadow-sm">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-neutral-950 dark:text-white">
+                <h2 className="text-base font-bold text-slate-950 dark:text-white">
                   Vault Key
                 </h2>
-                <span className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
+                <span className="text-xs font-mono text-[#1273FF] dark:text-blue-400 font-semibold">
                   AES-256
                 </span>
               </div>
@@ -1703,38 +1711,38 @@ export default function App() {
                   value={passphraseInput}
                   onChange={(e) => setPassphraseInput(e.target.value)}
                   placeholder="Key..."
-                  className="flex-1 px-3 py-1.5 text-sm font-mono bg-neutral-50 dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded focus:outline-none"
+                  className="flex-1 px-3.5 py-2 text-sm font-mono bg-white/90 dark:bg-slate-900 border border-blue-200 dark:border-slate-700 rounded-xl focus:outline-none"
                 />
                 <button
                   type="submit"
-                  className="px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded cursor-pointer"
+                  className="px-4 py-2 text-xs font-semibold bg-[#1273FF] text-white rounded-xl cursor-pointer"
                 >
                   Save
                 </button>
                 {passphraseSavedNotice && (
-                  <span className="text-xs text-emerald-600 font-medium">Saved</span>
+                  <span className="text-xs text-emerald-600 font-semibold">Saved</span>
                 )}
               </form>
             </section>
 
-            <section className="bg-white dark:bg-[#111827] border border-neutral-200 dark:border-neutral-800 rounded-lg overflow-hidden">
-              <div className="px-5 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-neutral-950 dark:text-white">Backups</h2>
-                <span className="text-xs text-neutral-500 font-mono tabular-nums">
+            <section className="schedule-card-light backdrop-blur-md border border-white/90 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+              <div className="px-5 py-3.5 border-b border-blue-100/80 dark:border-slate-800 flex items-center justify-between">
+                <h2 className="text-base font-bold text-slate-950 dark:text-white">Backups</h2>
+                <span className="text-xs text-slate-500 font-mono tabular-nums">
                   {backups.length} saved
                 </span>
               </div>
-              <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
+              <div className="divide-y divide-blue-100/60 dark:divide-slate-800">
                 {backups.map((snap) => (
                   <div
                     key={snap.id}
-                    className="px-5 py-3 flex items-center justify-between gap-3"
+                    className="px-5 py-3.5 flex items-center justify-between gap-3"
                   >
                     <div>
-                      <p className="text-sm font-medium text-neutral-950 dark:text-neutral-100">
+                      <p className="text-sm font-semibold text-slate-950 dark:text-slate-100">
                         {snap.label}
                       </p>
-                      <div className="flex items-center gap-1.5 text-xs text-neutral-500 font-mono tabular-nums">
+                      <div className="flex items-center gap-1.5 text-xs text-slate-500 font-mono tabular-nums">
                         <span>{new Date(snap.timestampMs).toLocaleTimeString()}</span>
                         <span>·</span>
                         <span>{snap.noteCount} notes</span>
@@ -1743,7 +1751,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => handleRestoreSnapshot(snap)}
-                      className="px-2.5 py-1 text-xs font-medium border border-neutral-300 dark:border-neutral-700 rounded cursor-pointer"
+                      className="px-3 py-1 text-xs font-semibold border border-blue-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800 rounded-xl cursor-pointer"
                     >
                       Restore
                     </button>
@@ -1753,30 +1761,87 @@ export default function App() {
             </section>
           </div>
         ) : (
-          /* HOME PAGE: CLEAN WHITE NOTE BOX WITH BIGGER TEXT & BIGGER NOTE INPUT */
+          /* HOME SCHEDULE & NOTE INTERFACE MATCHING REFERENCE SCREENSHOT */
           <div className="space-y-6">
-            {/* CLEAN NOTE COMPOSER BOX */}
+            {/* SCHEDULE HEADER: MONTH + YEAR & "Add New Note" ACTION + VERTICAL PILL DATE SCROLLER */}
+            <section className="space-y-4">
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => setSelectedDayOffset(0)}
+                  className="flex items-center gap-2 text-2xl sm:text-3xl tracking-tight text-slate-950 dark:text-white cursor-pointer"
+                >
+                  <span className="font-extrabold">{currentMonthYear.month}</span>
+                  <span className="font-light text-slate-700 dark:text-slate-300">
+                    {currentMonthYear.year}
+                  </span>
+                  <ChevronDown className="w-5 h-5 text-slate-700 dark:text-slate-300 mt-0.5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => composerTitleInputRef.current?.focus()}
+                  className="text-sm sm:text-base font-bold text-[#1273FF] dark:text-blue-400 hover:underline cursor-pointer"
+                >
+                  Add New Note
+                </button>
+              </div>
+
+              {/* 5 Vertical Capsule Date Pills (SUN 19, MON 20 active blue, TUE 21, WED 22, THU 23) */}
+              <div className="grid grid-cols-5 gap-2.5 sm:gap-3.5 pt-1">
+                {scheduleDays.map((d) => {
+                  const isSelected = selectedDayOffset === d.offset;
+                  return (
+                    <button
+                      key={d.offset}
+                      type="button"
+                      onClick={() => setSelectedDayOffset(d.offset)}
+                      className={`flex flex-col items-center justify-center py-4 sm:py-5 rounded-[34px] transition-colors cursor-pointer ${
+                        isSelected
+                          ? 'bg-[#1273FF] text-white shadow-lg shadow-blue-500/30'
+                          : 'bg-white/65 dark:bg-slate-800/70 border border-white/90 dark:border-slate-700/80 text-slate-800 dark:text-slate-200 hover:bg-white/90'
+                      }`}
+                    >
+                      <span
+                        className={`text-xs font-semibold tracking-wider ${
+                          isSelected
+                            ? 'text-white/95'
+                            : 'text-slate-500 dark:text-slate-400'
+                        }`}
+                      >
+                        {d.dayLabel}
+                      </span>
+                      <span className="text-xl sm:text-2xl font-bold mt-2 tabular-nums">
+                        {d.dateNum}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            {/* NOTE COMPOSER CARD IN SOFT SKY-BLUE / TRANSLUCENT WHITE STYLE */}
             <section
               aria-label="New Note"
-              className="bg-white dark:bg-[#111827] border border-neutral-200 dark:border-neutral-800 rounded-xl p-5 space-y-4 shadow-xs"
+              className="schedule-card-light backdrop-blur-md border border-white/90 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-[0_8px_30px_rgba(18,115,255,0.06)]"
             >
               {/* Top Row: Language Button + Lock Symbol Beside Language Box + Speak Button */}
-              <div className="flex items-center justify-between gap-2 pb-3 border-b border-neutral-100 dark:border-neutral-800">
+              <div className="flex items-center justify-between gap-2 pb-3 border-b border-blue-100/80 dark:border-slate-800">
                 <div className="flex items-center gap-2">
                   {/* Language Dropdown Button */}
                   <div className="relative">
                     <button
                       type="button"
                       onClick={() => setShowLanguageDropdown((v) => !v)}
-                      className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold border border-neutral-200 dark:border-neutral-700 rounded-md bg-neutral-50 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 hover:bg-neutral-100 transition-colors cursor-pointer"
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-blue-100 dark:border-slate-700 rounded-xl bg-white/90 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-white transition-colors cursor-pointer"
                     >
-                      <Globe className="w-3.5 h-3.5" />
+                      <Globe className="w-3.5 h-3.5 text-[#1273FF]" />
                       <span>Language</span>
                       <ChevronDown className="w-3.5 h-3.5" />
                     </button>
 
                     {showLanguageDropdown && (
-                      <div className="absolute left-0 mt-1 w-32 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-md shadow-lg py-1 z-20">
+                      <div className="absolute left-0 mt-1.5 w-36 bg-white dark:bg-slate-900 border border-blue-100 dark:border-slate-700 rounded-xl shadow-lg py-1 z-20">
                         {LANGUAGE_OPTIONS.map((lang) => {
                           const active = composerLanguage === lang.code;
                           return (
@@ -1784,10 +1849,10 @@ export default function App() {
                               key={lang.code}
                               type="button"
                               onClick={() => handleSelectDictationLanguage(lang.code)}
-                              className={`w-full text-left px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+                              className={`w-full text-left px-3.5 py-1.5 text-sm font-medium transition-colors cursor-pointer ${
                                 active
-                                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 font-semibold'
-                                  : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                                  ? 'bg-blue-50 text-[#1273FF] dark:bg-blue-950/60 dark:text-blue-300 font-semibold'
+                                  : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                               }`}
                             >
                               {lang.label}
@@ -1803,10 +1868,10 @@ export default function App() {
                     type="button"
                     onClick={handleOpenComposerLock}
                     title={composerPinCode ? `PIN Set (${composerPinCode})` : 'Set 4-Digit Lock'}
-                    className={`flex items-center gap-1 px-2 py-1 text-xs font-semibold border rounded-md transition-colors cursor-pointer ${
+                    className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold border rounded-xl transition-colors cursor-pointer ${
                       composerPinCode
-                        ? 'bg-neutral-900 text-white border-neutral-900 dark:bg-blue-600'
-                        : 'bg-neutral-50 dark:bg-neutral-800 border-neutral-200 dark:border-neutral-700 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100'
+                        ? 'bg-[#1273FF] text-white border-[#1273FF]'
+                        : 'bg-white/90 dark:bg-slate-800 border-blue-100 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-white'
                     }`}
                   >
                     <Lock className="w-3.5 h-3.5" />
@@ -1818,10 +1883,10 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => (isListening ? stopDictation() : startDictation())}
-                  className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-xs ${
                     isListening
                       ? 'bg-red-600 hover:bg-red-700 text-white'
-                      : 'bg-blue-600 hover:bg-blue-700 text-white'
+                      : 'bg-[#1273FF] hover:bg-blue-600 text-white'
                   }`}
                 >
                   {isListening ? (
@@ -1839,13 +1904,13 @@ export default function App() {
               </div>
 
               {isListening && (
-                <div className="px-3 py-1.5 rounded bg-blue-50 dark:bg-blue-950/50 border border-blue-200 text-xs text-blue-900 dark:text-blue-200">
+                <div className="px-3.5 py-2 rounded-xl bg-blue-50/90 dark:bg-blue-950/50 border border-blue-200 text-xs font-medium text-[#1273FF] dark:text-blue-200">
                   Speaking... {interimTranscript && <em>“{interimTranscript}”</em>}
                 </div>
               )}
 
               {speechError && (
-                <div className="px-3 py-1.5 rounded bg-red-50 dark:bg-amber-950/40 border border-red-200 flex items-center justify-between text-xs text-red-900 dark:text-amber-200">
+                <div className="px-3.5 py-2 rounded-xl bg-red-50 dark:bg-amber-950/40 border border-red-200 flex items-center justify-between text-xs text-red-900 dark:text-amber-200">
                   <span>{speechError}</span>
                   <button
                     type="button"
@@ -1860,11 +1925,12 @@ export default function App() {
               {/* Note Inputs with Much Bigger "Note" Entry Box */}
               <form onSubmit={handleCreateNote} className="space-y-3.5">
                 <input
+                  ref={composerTitleInputRef}
                   type="text"
                   value={composerTitle}
                   onChange={(e) => setComposerTitle(e.target.value)}
                   placeholder="Title..."
-                  className="w-full px-3.5 py-2 text-base font-semibold bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-blue-600 text-neutral-900 dark:text-white"
+                  className="w-full px-4 py-2.5 text-base font-bold bg-white/90 dark:bg-slate-900/90 border border-blue-100 dark:border-slate-700 rounded-xl focus:outline-none focus:border-[#1273FF] text-slate-900 dark:text-white"
                 />
 
                 <textarea
@@ -1876,7 +1942,7 @@ export default function App() {
                   }
                   onChange={(e) => setComposerContent(e.target.value)}
                   placeholder="Note..."
-                  className="w-full min-h-[180px] px-3.5 py-3 text-base leading-relaxed bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-lg focus:outline-none focus:border-blue-600 text-neutral-900 dark:text-white resize-y"
+                  className="w-full min-h-[180px] px-4 py-3 text-base leading-relaxed bg-white/90 dark:bg-slate-900/90 border border-blue-100 dark:border-slate-700 rounded-xl focus:outline-none focus:border-[#1273FF] text-slate-900 dark:text-white resize-y"
                 />
 
                 {/* Controls Row: Constant-Size Round Color Buttons (With Right Tick Mark Only) + Reminder Button + Alert */}
@@ -1906,9 +1972,9 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setShowComposerReminderMenu((v) => !v)}
-                        className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold border border-neutral-200 dark:border-neutral-700 rounded bg-neutral-50 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 cursor-pointer"
+                        className="flex items-center gap-1 px-3 py-1 text-xs font-semibold border border-blue-100 dark:border-slate-700 rounded-xl bg-white/90 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-white cursor-pointer"
                       >
-                        <Clock className="w-3 h-3" />
+                        <Clock className="w-3.5 h-3.5 text-[#1273FF]" />
                         <span>
                           Reminder{composerReminderLabel ? `: ${composerReminderLabel}` : ''}
                         </span>
@@ -1916,25 +1982,25 @@ export default function App() {
                       </button>
 
                       {showComposerReminderMenu && (
-                        <div className="absolute right-0 mt-1 w-32 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-md shadow-lg py-1 z-20">
+                        <div className="absolute right-0 mt-1 w-32 bg-white dark:bg-slate-900 border border-blue-100 dark:border-slate-700 rounded-xl shadow-lg py-1 z-20">
                           <button
                             type="button"
                             onClick={() => handleSelectComposerReminderPreset(5, '5min')}
-                            className="w-full text-left px-3 py-1.5 text-xs font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                            className="w-full text-left px-3 py-1.5 text-xs font-medium hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
                           >
                             5min
                           </button>
                           <button
                             type="button"
                             onClick={() => handleSelectComposerReminderPreset(15, '15min')}
-                            className="w-full text-left px-3 py-1.5 text-xs font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                            className="w-full text-left px-3 py-1.5 text-xs font-medium hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
                           >
                             15min
                           </button>
                           <button
                             type="button"
                             onClick={() => handleSelectComposerReminderPreset(30, '30min')}
-                            className="w-full text-left px-3 py-1.5 text-xs font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                            className="w-full text-left px-3 py-1.5 text-xs font-medium hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
                           >
                             30min
                           </button>
@@ -1948,7 +2014,7 @@ export default function App() {
                               }
                               setShowComposerReminderMenu(false);
                             }}
-                            className="w-full text-left px-3 py-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer border-t border-neutral-100 dark:border-neutral-800"
+                            className="w-full text-left px-3 py-1.5 text-xs font-semibold text-[#1273FF] dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer border-t border-blue-50 dark:border-slate-800"
                           >
                             Set timer
                           </button>
@@ -1956,17 +2022,17 @@ export default function App() {
                       )}
                     </div>
 
-                    <span className="text-xs font-medium text-neutral-500">Alert</span>
-                    <div className="inline-flex items-center p-0.5 bg-neutral-100 dark:bg-neutral-800 rounded border border-neutral-200 dark:border-neutral-700 gap-0.5">
+                    <span className="text-xs font-semibold text-slate-500">Alert</span>
+                    <div className="inline-flex items-center p-0.5 bg-blue-50/80 dark:bg-slate-800 rounded-xl border border-blue-100 dark:border-slate-700 gap-0.5">
                       {(['voice', 'text', 'off'] as AlertMode[]).map((mode) => (
                         <button
                           key={mode}
                           type="button"
                           onClick={() => setComposerAlertMode(mode)}
-                          className={`px-2 py-0.5 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          className={`px-2 py-0.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                             composerAlertMode === mode
-                              ? 'bg-blue-600 text-white'
-                              : 'text-neutral-600 dark:text-neutral-400'
+                              ? 'bg-[#1273FF] text-white'
+                              : 'text-slate-600 dark:text-slate-400'
                           }`}
                         >
                           {mode}
@@ -1979,19 +2045,19 @@ export default function App() {
                         type="datetime-local"
                         value={composerReminderTime}
                         onChange={(e) => setComposerReminderTime(e.target.value)}
-                        className="px-2 py-0.5 text-xs font-mono tabular-nums bg-neutral-50 dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded focus:outline-none"
+                        className="px-2.5 py-1 text-xs font-mono tabular-nums bg-white dark:bg-slate-900 border border-blue-200 dark:border-slate-700 rounded-xl focus:outline-none"
                       />
                     )}
                   </div>
                 </div>
 
                 {/* Bottom Row of Note Box: Small File Boxes + Save Button */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-neutral-100 dark:border-neutral-800">
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-blue-100/80 dark:border-slate-800">
                   <div className="flex flex-wrap items-center gap-1.5">
                     {composerAttachments.map((att) => (
                       <div
                         key={att.id}
-                        className="relative group w-8 h-8 rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 flex items-center justify-center overflow-hidden shrink-0"
+                        className="relative group w-8 h-8 rounded-lg border border-blue-200 dark:border-slate-700 bg-white dark:bg-slate-900 flex items-center justify-center overflow-hidden shrink-0"
                         title={att.name}
                       >
                         {att.kind === 'image' && att.previewDataUrl ? (
@@ -2002,7 +2068,7 @@ export default function App() {
                             className="w-full h-full object-cover"
                           />
                         ) : (
-                          <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                          <FileText className="w-3.5 h-3.5 text-[#1273FF]" />
                         )}
                         <button
                           type="button"
@@ -2011,7 +2077,7 @@ export default function App() {
                               prev.filter((item) => item.id !== att.id)
                             )
                           }
-                          className="absolute top-0 right-0 w-3.5 h-3.5 rounded-full bg-neutral-900/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                          className="absolute top-0 right-0 w-3.5 h-3.5 rounded-full bg-slate-900/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
                         >
                           <X className="w-2.5 h-2.5" />
                         </button>
@@ -2021,11 +2087,11 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => composerFileInputRef.current?.click()}
-                      className="w-8 h-8 rounded border border-dashed border-neutral-300 dark:border-neutral-700 hover:border-blue-600 bg-neutral-50 dark:bg-neutral-900/60 flex flex-col items-center justify-center text-neutral-500 transition-colors shrink-0 cursor-pointer"
+                      className="w-8 h-8 rounded-lg border border-dashed border-blue-300 dark:border-slate-700 hover:border-[#1273FF] bg-white/80 dark:bg-slate-900/60 flex flex-col items-center justify-center text-slate-500 transition-colors shrink-0 cursor-pointer"
                       title="Add file"
                     >
-                      <Plus className="w-3 h-3" />
-                      <span className="text-[9px] font-medium">File</span>
+                      <Plus className="w-3 h-3 text-[#1273FF]" />
+                      <span className="text-[9px] font-semibold">File</span>
                     </button>
                     <input
                       ref={composerFileInputRef}
@@ -2039,7 +2105,7 @@ export default function App() {
 
                   <button
                     type="submit"
-                    className="px-4 py-1.5 text-xs font-semibold bg-neutral-900 dark:bg-blue-600 hover:bg-neutral-800 text-white rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    className="px-5 py-2 text-xs font-bold bg-[#1273FF] hover:bg-blue-600 text-white rounded-xl shadow-sm shadow-blue-500/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     Save
                   </button>
@@ -2051,8 +2117,8 @@ export default function App() {
             {(selectedColorFolder !== 'all' ||
               languageFilter !== 'all' ||
               activeSection !== 'notes') && (
-              <div className="flex items-center justify-between px-3.5 py-2 rounded-lg bg-neutral-100 dark:bg-neutral-800/70 text-xs">
-                <div className="flex items-center gap-2 font-medium">
+              <div className="flex items-center justify-between px-4 py-2.5 rounded-2xl bg-white/75 dark:bg-slate-800/80 border border-white/90 dark:border-slate-700 text-xs">
+                <div className="flex items-center gap-2 font-semibold">
                   {selectedColorFolder !== 'all' && (
                     <span className="flex items-center gap-1.5">
                       <span
@@ -2078,335 +2144,469 @@ export default function App() {
                     setLanguageFilter('all');
                     setActiveSection('notes');
                   }}
-                  className="text-blue-600 dark:text-blue-400 font-semibold underline cursor-pointer"
+                  className="text-[#1273FF] dark:text-blue-400 font-bold underline cursor-pointer"
                 >
                   All Notes
                 </button>
               </div>
             )}
 
-            {/* PREVIOUS NOTES SECTION: SHOWS NOTE TITLE AS HEADING NAME */}
+            {/* PREVIOUS NOTES SCHEDULE TIMELINE SECTION (MATCHING SCREENSHOT TIMELINE & CARDS) */}
             {showPreviousNotes && (
-              <div ref={previousNotesRef} className="space-y-3">
-                <div className="flex items-center justify-between gap-2">
+              <div ref={previousNotesRef} className="space-y-4">
+                <div className="flex items-center justify-between gap-3">
                   <div className="relative flex-1">
-                    <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Search..."
-                      className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-[#111827] border border-neutral-200 dark:border-neutral-800 rounded-lg focus:outline-none"
+                      placeholder="Search schedule notes..."
+                      className="w-full pl-9 pr-3.5 py-2 text-sm bg-white/75 dark:bg-slate-900/80 border border-white/90 dark:border-slate-800 rounded-2xl focus:outline-none focus:border-[#1273FF]"
                     />
                   </div>
-                  <span className="text-xs text-neutral-500 font-mono tabular-nums shrink-0">
+                  <span className="text-xs font-semibold text-slate-500 font-mono tabular-nums shrink-0">
                     {filteredNotes.length} notes
                   </span>
                 </div>
 
                 {filteredNotes.length === 0 ? (
-                  <div className="p-6 bg-white dark:bg-[#111827] border border-neutral-200 dark:border-neutral-800 rounded-lg text-center">
-                    <p className="text-sm text-neutral-400">No notes</p>
+                  <div className="p-8 schedule-card-light border border-white/90 dark:border-slate-800 rounded-2xl text-center">
+                    <p className="text-sm font-medium text-slate-500">No notes</p>
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {filteredNotes.map((note) => {
+                  <div className="space-y-4">
+                    {filteredNotes.map((note, idx) => {
                       const isExpanded = expandedNoteId === note.id;
+                      const isBlueFeatured = isExpanded || idx === filteredNotes.length - 1;
                       const isSpeakingThis = speakingNoteId === note.id;
                       const isEditingThis = editingNoteId === note.id;
                       const langMeta = getLanguageMeta(note.language);
+                      const timeLabel = formatTimelineHour(note);
 
                       return (
-                        <article
-                          key={note.id}
-                          className="bg-white dark:bg-[#111827] border border-neutral-200 dark:border-neutral-800 rounded-lg px-4 py-3 transition-colors"
-                        >
-                          {/* Heading Row: Uses Note Title for Note Name */}
-                          <div className="flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setExpandedNoteId((prev) => (prev === note.id ? null : note.id))
-                              }
-                              className="flex items-center gap-2 text-left flex-1 min-w-0 cursor-pointer"
-                            >
-                              <span className="text-sm font-bold text-neutral-900 dark:text-white truncate">
-                                {note.title}
+                        <React.Fragment key={note.id}>
+                          {/* Current Time Blue Line Divider before the featured blue card (just like 13:00 in screenshot) */}
+                          {idx === filteredNotes.length - 1 && filteredNotes.length > 1 && (
+                            <div className="flex items-center gap-3 py-1">
+                              <span className="w-12 text-xs font-semibold text-slate-400 dark:text-slate-500 font-mono tabular-nums text-right">
+                                13:00
                               </span>
-                              {note.isPinLocked && (
-                                <Lock className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
-                              )}
-                            </button>
-
-                            <div className="flex items-center gap-2 shrink-0">
-                              {/* Round Color Buttons — Constant Size, Only Right Tick Mark Changes */}
-                              <div className="flex items-center gap-1.5">
-                                {COLOR_FOLDERS.map((col) => {
-                                  const active = note.importance === col.id;
-                                  return (
-                                    <button
-                                      key={col.id}
-                                      type="button"
-                                      onClick={() => handleSetNoteImportance(note, col.id)}
-                                      aria-label={col.folderName}
-                                      title={col.folderName}
-                                      className={`w-3.5 h-3.5 rounded-full ${col.bgClass} flex items-center justify-center cursor-pointer`}
-                                    >
-                                      {active && (
-                                        <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
-                                      )}
-                                    </button>
-                                  );
-                                })}
+                              <div className="flex-1 flex items-center">
+                                <span className="w-2.5 h-2.5 rounded-full bg-[#1273FF] shrink-0" />
+                                <div className="h-[2px] flex-1 bg-gradient-to-r from-[#1273FF] to-[#1273FF]/30" />
                               </div>
-
-                              {/* Language Tag + Small Lock Symbol Beside It */}
-                              <span className="px-2 py-0.5 text-xs font-medium bg-neutral-100 dark:bg-neutral-800 rounded text-neutral-600 dark:text-neutral-300">
-                                {langMeta.label}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleClickNoteLock(note)}
-                                title={note.isPinLocked ? 'Unlock 4-digit PIN' : 'Set 4-digit PIN'}
-                                className="p-1 text-neutral-500 hover:text-neutral-900 dark:hover:text-white cursor-pointer"
-                              >
-                                {note.isPinLocked ? (
-                                  <Lock className="w-3.5 h-3.5" />
-                                ) : (
-                                  <Unlock className="w-3.5 h-3.5" />
-                                )}
-                              </button>
                             </div>
-                          </div>
+                          )}
 
-                          {/* Expanded Note Content (when user clicks the note title) */}
-                          {isExpanded && (
-                            <div className="mt-3 pt-2.5 border-t border-neutral-100 dark:border-neutral-800 space-y-2.5">
-                              {note.isPinLocked ? (
-                                <div className="py-1 flex items-center justify-between">
-                                  <span className="text-xs font-mono text-neutral-500">
-                                    •••• Locked Note
+                          <div className="flex items-start gap-3 sm:gap-4">
+                            {/* Left Time Column (09:00, 11:00, 14:00) */}
+                            <div className="w-12 pt-3 text-right shrink-0">
+                              <span className="text-xs sm:text-sm font-semibold text-slate-400 dark:text-slate-500 font-mono tabular-nums">
+                                {timeLabel}
+                              </span>
+                            </div>
+
+                            {/* Right Schedule Note Card */}
+                            <article
+                              className={`flex-1 rounded-2xl px-5 py-4 transition-colors ${
+                                isBlueFeatured
+                                  ? 'schedule-card-blue text-white shadow-lg shadow-blue-500/25 border border-blue-400/40'
+                                  : 'schedule-card-light text-slate-900 dark:text-white border border-white/95 dark:border-slate-800 shadow-[0_4px_20px_rgba(18,115,255,0.05)]'
+                              }`}
+                            >
+                              {/* Heading Row: Uses Note Title for Note Name */}
+                              <div className="flex items-center justify-between gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedNoteId((prev) =>
+                                      prev === note.id ? null : note.id
+                                    )
+                                  }
+                                  className="flex items-center gap-2 text-left flex-1 min-w-0 cursor-pointer"
+                                >
+                                  <span
+                                    className={`text-base font-bold truncate ${
+                                      isBlueFeatured
+                                        ? 'text-white'
+                                        : 'text-slate-900 dark:text-white'
+                                    }`}
+                                  >
+                                    {note.title}
+                                  </span>
+                                  {note.isPinLocked && (
+                                    <Lock
+                                      className={`w-3.5 h-3.5 shrink-0 ${
+                                        isBlueFeatured ? 'text-white/90' : 'text-slate-500'
+                                      }`}
+                                    />
+                                  )}
+                                </button>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {/* Round Color Buttons — Constant Size, Only Right Tick Mark Changes */}
+                                  <div className="flex items-center gap-1.5 bg-black/10 dark:bg-black/25 px-2 py-1 rounded-full">
+                                    {COLOR_FOLDERS.map((col) => {
+                                      const active = note.importance === col.id;
+                                      return (
+                                        <button
+                                          key={col.id}
+                                          type="button"
+                                          onClick={() => handleSetNoteImportance(note, col.id)}
+                                          aria-label={col.folderName}
+                                          title={col.folderName}
+                                          className={`w-3.5 h-3.5 rounded-full ${col.bgClass} flex items-center justify-center cursor-pointer`}
+                                        >
+                                          {active && (
+                                            <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
+                                          )}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Language Tag + Small Lock Symbol Beside It */}
+                                  <span
+                                    className={`px-2 py-0.5 text-xs font-semibold rounded-lg ${
+                                      isBlueFeatured
+                                        ? 'bg-white/20 text-white'
+                                        : 'bg-blue-50 dark:bg-slate-800 text-[#1273FF] dark:text-blue-300'
+                                    }`}
+                                  >
+                                    {langMeta.label}
                                   </span>
                                   <button
                                     type="button"
                                     onClick={() => handleClickNoteLock(note)}
-                                    className="px-2.5 py-1 text-xs font-semibold bg-neutral-900 dark:bg-blue-600 text-white rounded cursor-pointer"
+                                    title={
+                                      note.isPinLocked ? 'Unlock 4-digit PIN' : 'Set 4-digit PIN'
+                                    }
+                                    className={`p-1 cursor-pointer ${
+                                      isBlueFeatured
+                                        ? 'text-white/90 hover:text-white'
+                                        : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                                    }`}
                                   >
-                                    Unlock
+                                    {note.isPinLocked ? (
+                                      <Lock className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <Unlock className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedNoteId((prev) =>
+                                        prev === note.id ? null : note.id
+                                      )
+                                    }
+                                    className={`p-1 cursor-pointer ${
+                                      isBlueFeatured ? 'text-white/90' : 'text-slate-400'
+                                    }`}
+                                    aria-label="Toggle note details"
+                                  >
+                                    <MoreVertical className="w-4 h-4" />
                                   </button>
                                 </div>
-                              ) : isEditingThis ? (
-                                <div className="space-y-2">
-                                  <input
-                                    type="text"
-                                    value={editTitle}
-                                    onChange={(e) => setEditTitle(e.target.value)}
-                                    className="w-full px-2.5 py-1 text-sm font-semibold bg-neutral-50 dark:bg-neutral-900 border border-neutral-300 rounded"
-                                  />
-                                  <textarea
-                                    rows={3}
-                                    value={editContent}
-                                    onChange={(e) => setEditContent(e.target.value)}
-                                    className="w-full px-2.5 py-1.5 text-sm bg-neutral-50 dark:bg-neutral-900 border border-neutral-300 rounded resize-none"
-                                  />
-                                  <div className="flex items-center gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSaveEdit(note)}
-                                      className="px-2.5 py-1 text-xs font-semibold bg-blue-600 text-white rounded cursor-pointer"
-                                    >
-                                      Save
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setEditingNoteId(null)}
-                                      className="px-2.5 py-1 text-xs border border-neutral-300 rounded cursor-pointer"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="space-y-2">
-                                  <div className="flex items-start gap-2.5">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleToggleCompleted(note)}
-                                      className="mt-0.5 text-neutral-400 hover:text-blue-600 cursor-pointer"
-                                    >
-                                      {note.isCompleted ? (
-                                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                                      ) : (
-                                        <Circle className="w-4 h-4" />
-                                      )}
-                                    </button>
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-sm text-neutral-700 dark:text-neutral-300 whitespace-pre-wrap leading-relaxed">
-                                        {note.content}
-                                      </p>
-                                    </div>
-                                  </div>
+                              </div>
 
-                                  {/* Reminder Button (5min, 15min, 30min, set timer) + Alert + Small File Boxes */}
-                                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
-                                    <div className="flex flex-wrap items-center gap-1.5">
-                                      {note.attachments.map((att) => (
-                                        <div
-                                          key={att.id}
-                                          className="relative group w-7 h-7 rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 flex items-center justify-center overflow-hidden shrink-0"
-                                        >
-                                          <button
-                                            type="button"
-                                            onClick={() => handleOpenAttachment(att)}
-                                            className="w-full h-full flex items-center justify-center cursor-pointer"
-                                            title={att.name}
-                                          >
-                                            {att.kind === 'image' && att.previewDataUrl ? (
-                                              <img
-                                                src={att.previewDataUrl}
-                                                alt={att.name}
-                                                referrerPolicy="no-referrer"
-                                                className="w-full h-full object-cover"
-                                              />
-                                            ) : (
-                                              <FileText className="w-3.5 h-3.5 text-blue-600" />
-                                            )}
-                                          </button>
-                                        </div>
-                                      ))}
-                                      <label
-                                        title="Add file"
-                                        className="w-7 h-7 rounded border border-dashed border-neutral-300 dark:border-neutral-700 flex items-center justify-center text-neutral-500 cursor-pointer"
+                              {/* Expanded Note Content (when user clicks the note title) */}
+                              {isExpanded && (
+                                <div
+                                  className={`mt-3 pt-3 border-t space-y-3 ${
+                                    isBlueFeatured
+                                      ? 'border-white/20'
+                                      : 'border-blue-100/80 dark:border-slate-800'
+                                  }`}
+                                >
+                                  {note.isPinLocked ? (
+                                    <div className="py-1 flex items-center justify-between">
+                                      <span
+                                        className={`text-xs font-mono ${
+                                          isBlueFeatured ? 'text-white/90' : 'text-slate-500'
+                                        }`}
                                       >
-                                        <Plus className="w-3 h-3" />
-                                        <input
-                                          type="file"
-                                          multiple
-                                          accept="image/*,.pdf,.txt,.doc,.docx,.csv,.md,.json"
-                                          onChange={(e) => handleNoteFilesUpload(note.id, e)}
-                                          className="hidden"
-                                        />
-                                      </label>
+                                        •••• Locked Note
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleClickNoteLock(note)}
+                                        className={`px-3 py-1 text-xs font-bold rounded-xl cursor-pointer ${
+                                          isBlueFeatured
+                                            ? 'bg-white text-[#1273FF]'
+                                            : 'bg-[#1273FF] text-white'
+                                        }`}
+                                      >
+                                        Unlock
+                                      </button>
                                     </div>
-
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      {/* Reminder Button on Note */}
-                                      <div className="relative">
+                                  ) : isEditingThis ? (
+                                    <div className="space-y-2 text-slate-900">
+                                      <input
+                                        type="text"
+                                        value={editTitle}
+                                        onChange={(e) => setEditTitle(e.target.value)}
+                                        className="w-full px-3 py-1.5 text-sm font-semibold bg-white dark:bg-slate-900 dark:text-white border border-blue-200 rounded-xl"
+                                      />
+                                      <textarea
+                                        rows={3}
+                                        value={editContent}
+                                        onChange={(e) => setEditContent(e.target.value)}
+                                        className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-900 dark:text-white border border-blue-200 rounded-xl resize-none"
+                                      />
+                                      <div className="flex items-center gap-2">
                                         <button
                                           type="button"
-                                          onClick={() =>
-                                            setOpenNoteReminderMenuId((prev) =>
-                                              prev === note.id ? null : note.id
-                                            )
-                                          }
-                                          className="flex items-center gap-1 px-2 py-0.5 text-xs font-semibold border border-neutral-200 dark:border-neutral-700 rounded bg-neutral-50 dark:bg-neutral-800 cursor-pointer"
+                                          onClick={() => handleSaveEdit(note)}
+                                          className="px-3 py-1 text-xs font-bold bg-white text-[#1273FF] rounded-xl cursor-pointer shadow-xs"
                                         >
-                                          <Clock className="w-3 h-3" />
-                                          <span>Reminder</span>
+                                          Save
                                         </button>
-
-                                        {openNoteReminderMenuId === note.id && (
-                                          <div className="absolute right-0 mt-1 w-32 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded shadow-lg py-1 z-20">
-                                            <button
-                                              type="button"
-                                              onClick={() => handleSelectNoteReminderPreset(note, 5)}
-                                              className="w-full text-left px-2.5 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
-                                            >
-                                              5min
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => handleSelectNoteReminderPreset(note, 15)}
-                                              className="w-full text-left px-2.5 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
-                                            >
-                                              15min
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => handleSelectNoteReminderPreset(note, 30)}
-                                              className="w-full text-left px-2.5 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
-                                            >
-                                              30min
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => {
-                                                setCustomTimerNoteId(note.id);
-                                                setOpenNoteReminderMenuId(null);
-                                              }}
-                                              className="w-full text-left px-2.5 py-1 text-xs font-semibold text-blue-600 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer border-t border-neutral-100 dark:border-neutral-800"
-                                            >
-                                              Set timer
-                                            </button>
-                                          </div>
-                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => setEditingNoteId(null)}
+                                          className="px-3 py-1 text-xs font-semibold border border-white/60 text-white rounded-xl cursor-pointer"
+                                        >
+                                          Cancel
+                                        </button>
                                       </div>
-
-                                      {/* Small Alert (voice, text, off) */}
-                                      <div className="inline-flex items-center p-0.5 bg-neutral-100 dark:bg-neutral-800 rounded border border-neutral-200 dark:border-neutral-700 gap-0.5">
-                                        {(['voice', 'text', 'off'] as AlertMode[]).map((mode) => (
-                                          <button
-                                            key={mode}
-                                            type="button"
-                                            onClick={() => handleSetNoteAlertMode(note, mode)}
-                                            className={`px-1.5 py-0.5 text-xs font-medium rounded cursor-pointer ${
-                                              note.alertMode === mode
-                                                ? 'bg-blue-600 text-white'
-                                                : 'text-neutral-600 dark:text-neutral-400'
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-3">
+                                      <div className="flex items-start gap-2.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleToggleCompleted(note)}
+                                          className={`mt-0.5 cursor-pointer ${
+                                            isBlueFeatured
+                                              ? 'text-white/90'
+                                              : 'text-slate-400 hover:text-[#1273FF]'
+                                          }`}
+                                        >
+                                          {note.isCompleted ? (
+                                            <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+                                          ) : (
+                                            <Circle className="w-4 h-4" />
+                                          )}
+                                        </button>
+                                        <div className="flex-1 min-w-0">
+                                          <p
+                                            className={`text-sm whitespace-pre-wrap leading-relaxed ${
+                                              isBlueFeatured
+                                                ? 'text-white/95'
+                                                : 'text-slate-700 dark:text-slate-300'
                                             }`}
                                           >
-                                            {mode}
-                                          </button>
-                                        ))}
+                                            {note.content}
+                                          </p>
+                                        </div>
                                       </div>
 
-                                      {customTimerNoteId === note.id && (
-                                        <input
-                                          type="datetime-local"
-                                          value={note.reminderTime}
-                                          onChange={(e) =>
-                                            handleUpdateNoteReminderTime(note, e.target.value)
-                                          }
-                                          className="px-1.5 py-0.5 text-xs font-mono bg-neutral-50 dark:bg-neutral-900 border border-neutral-300 rounded"
-                                        />
-                                      )}
+                                      {/* Reminder Button (5min, 15min, 30min, set timer) + Alert + Small File Boxes */}
+                                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                          {note.attachments.map((att) => (
+                                            <div
+                                              key={att.id}
+                                              className="relative group w-8 h-8 rounded-full border-2 border-white dark:border-slate-700 bg-white dark:bg-slate-900 flex items-center justify-center overflow-hidden shrink-0 shadow-xs"
+                                            >
+                                              <button
+                                                type="button"
+                                                onClick={() => handleOpenAttachment(att)}
+                                                className="w-full h-full flex items-center justify-center cursor-pointer"
+                                                title={att.name}
+                                              >
+                                                {att.kind === 'image' && att.previewDataUrl ? (
+                                                  <img
+                                                    src={att.previewDataUrl}
+                                                    alt={att.name}
+                                                    referrerPolicy="no-referrer"
+                                                    className="w-full h-full object-cover"
+                                                  />
+                                                ) : (
+                                                  <FileText className="w-3.5 h-3.5 text-[#1273FF]" />
+                                                )}
+                                              </button>
+                                            </div>
+                                          ))}
+                                          <label
+                                            title="Add file"
+                                            className={`w-8 h-8 rounded-full border border-dashed flex items-center justify-center cursor-pointer ${
+                                              isBlueFeatured
+                                                ? 'border-white/70 text-white'
+                                                : 'border-blue-300 text-[#1273FF]'
+                                            }`}
+                                          >
+                                            <Plus className="w-3.5 h-3.5" />
+                                            <input
+                                              type="file"
+                                              multiple
+                                              accept="image/*,.pdf,.txt,.doc,.docx,.csv,.md,.json"
+                                              onChange={(e) => handleNoteFilesUpload(note.id, e)}
+                                              className="hidden"
+                                            />
+                                          </label>
+                                        </div>
 
-                                      <button
-                                        type="button"
-                                        onClick={() => handleSpeakNoteNow(note)}
-                                        className="px-2 py-0.5 text-xs font-medium border border-neutral-200 dark:border-neutral-700 rounded cursor-pointer"
-                                      >
-                                        {isSpeakingThis ? 'Stop' : 'Voice'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleStartEdit(note)}
-                                        className="p-1 text-neutral-500 hover:text-neutral-900 cursor-pointer"
-                                      >
-                                        <Edit3 className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteNote(note)}
-                                        className="p-1 text-neutral-500 hover:text-red-600 cursor-pointer"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          {/* Reminder Button on Note */}
+                                          <div className="relative">
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                setOpenNoteReminderMenuId((prev) =>
+                                                  prev === note.id ? null : note.id
+                                                )
+                                              }
+                                              className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-xl cursor-pointer ${
+                                                isBlueFeatured
+                                                  ? 'bg-white/20 text-white'
+                                                  : 'bg-white dark:bg-slate-800 border border-blue-100 text-slate-700 dark:text-slate-200'
+                                              }`}
+                                            >
+                                              <Clock className="w-3 h-3" />
+                                              <span>Reminder</span>
+                                            </button>
+
+                                            {openNoteReminderMenuId === note.id && (
+                                              <div className="absolute right-0 mt-1 w-32 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 border border-blue-100 dark:border-slate-700 rounded-xl shadow-lg py-1 z-20">
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    handleSelectNoteReminderPreset(note, 5)
+                                                  }
+                                                  className="w-full text-left px-3 py-1 text-xs hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
+                                                >
+                                                  5min
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    handleSelectNoteReminderPreset(note, 15)
+                                                  }
+                                                  className="w-full text-left px-3 py-1 text-xs hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
+                                                >
+                                                  15min
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    handleSelectNoteReminderPreset(note, 30)
+                                                  }
+                                                  className="w-full text-left px-3 py-1 text-xs hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
+                                                >
+                                                  30min
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    setCustomTimerNoteId(note.id);
+                                                    setOpenNoteReminderMenuId(null);
+                                                  }}
+                                                  className="w-full text-left px-3 py-1 text-xs font-semibold text-[#1273FF] hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer border-t border-blue-50 dark:border-slate-800"
+                                                >
+                                                  Set timer
+                                                </button>
+                                              </div>
+                                            )}
+                                          </div>
+
+                                          {/* Small Alert (voice, text, off) */}
+                                          <div
+                                            className={`inline-flex items-center p-0.5 rounded-xl gap-0.5 ${
+                                              isBlueFeatured
+                                                ? 'bg-white/20'
+                                                : 'bg-blue-50 dark:bg-slate-800 border border-blue-100 dark:border-slate-700'
+                                            }`}
+                                          >
+                                            {(['voice', 'text', 'off'] as AlertMode[]).map(
+                                              (mode) => (
+                                                <button
+                                                  key={mode}
+                                                  type="button"
+                                                  onClick={() => handleSetNoteAlertMode(note, mode)}
+                                                  className={`px-2 py-0.5 text-xs font-semibold rounded-lg cursor-pointer ${
+                                                    note.alertMode === mode
+                                                      ? isBlueFeatured
+                                                        ? 'bg-white text-[#1273FF]'
+                                                        : 'bg-[#1273FF] text-white'
+                                                      : isBlueFeatured
+                                                      ? 'text-white/80'
+                                                      : 'text-slate-600 dark:text-slate-400'
+                                                  }`}
+                                                >
+                                                  {mode}
+                                                </button>
+                                              )
+                                            )}
+                                          </div>
+
+                                          {customTimerNoteId === note.id && (
+                                            <input
+                                              type="datetime-local"
+                                              value={note.reminderTime}
+                                              onChange={(e) =>
+                                                handleUpdateNoteReminderTime(note, e.target.value)
+                                              }
+                                              className="px-2 py-0.5 text-xs font-mono text-slate-900 bg-white border border-blue-200 rounded-lg"
+                                            />
+                                          )}
+
+                                          <button
+                                            type="button"
+                                            onClick={() => handleSpeakNoteNow(note)}
+                                            className={`px-2.5 py-0.5 text-xs font-semibold rounded-lg cursor-pointer ${
+                                              isBlueFeatured
+                                                ? 'bg-white/20 text-white'
+                                                : 'border border-blue-200 text-[#1273FF]'
+                                            }`}
+                                          >
+                                            {isSpeakingThis ? 'Stop' : 'Voice'}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleStartEdit(note)}
+                                            className={`p-1 cursor-pointer ${
+                                              isBlueFeatured
+                                                ? 'text-white/90 hover:text-white'
+                                                : 'text-slate-500 hover:text-slate-900'
+                                            }`}
+                                          >
+                                            <Edit3 className="w-3.5 h-3.5" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteNote(note)}
+                                            className={`p-1 cursor-pointer ${
+                                              isBlueFeatured
+                                                ? 'text-white/90 hover:text-red-200'
+                                                : 'text-slate-500 hover:text-red-600'
+                                            }`}
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
+                                      </div>
                                     </div>
-                                  </div>
+                                  )}
                                 </div>
                               )}
-                            </div>
-                          )}
 
-                          {/* Bottom of Note: Small Date */}
-                          <div className="pt-1.5 flex items-center justify-between text-xs font-mono tabular-nums text-neutral-400">
-                            <span>{formatReadableDateTime(note.updatedAtMs)}</span>
-                            {note.alertMode !== 'off' && note.reminderTime && (
-                              <span>Reminder: {formatReadableTime(note.reminderTime)}</span>
-                            )}
+                              {/* Bottom of Note: Small Date */}
+                              <div
+                                className={`pt-2 flex items-center justify-between text-xs font-mono tabular-nums ${
+                                  isBlueFeatured ? 'text-blue-100' : 'text-slate-400'
+                                }`}
+                              >
+                                <span>{formatReadableDateTime(note.updatedAtMs)}</span>
+                                {note.alertMode !== 'off' && note.reminderTime && (
+                                  <span>Reminder: {formatReadableTime(note.reminderTime)}</span>
+                                )}
+                              </div>
+                            </article>
                           </div>
-                        </article>
+                        </React.Fragment>
                       );
                     })}
                   </div>
@@ -2434,28 +2634,28 @@ export default function App() {
             });
           }}
           title="Previous Notes"
-          className="flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-800 dark:text-neutral-200 shadow-sm hover:bg-neutral-100 transition-colors cursor-pointer"
+          className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/90 dark:border-slate-700 bg-[#1273FF] text-white shadow-lg shadow-blue-500/30 hover:bg-blue-600 transition-colors cursor-pointer"
         >
           <ScrollText className="w-4 h-4" />
-          <span className="text-xs font-semibold">Notes ({notes.length})</span>
+          <span className="text-xs font-bold">Notes ({notes.length})</span>
         </button>
       </footer>
 
       {/* 4-DIGIT NUMBER LOCK MODAL */}
       {pinModalState && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-[#111827] border border-neutral-200 dark:border-neutral-700 rounded-xl max-w-xs w-full p-5 space-y-3.5 shadow-xl">
-            <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-2.5">
+        <div className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#0D1B38] border border-blue-100 dark:border-slate-700 rounded-2xl max-w-xs w-full p-5 space-y-3.5 shadow-xl">
+            <div className="flex items-center justify-between border-b border-blue-100 dark:border-slate-800 pb-2.5">
               <div className="flex items-center gap-1.5">
-                <Lock className="w-4 h-4 text-neutral-700 dark:text-neutral-300" />
-                <h3 className="text-sm font-bold text-neutral-950 dark:text-white">
+                <Lock className="w-4 h-4 text-[#1273FF]" />
+                <h3 className="text-sm font-bold text-slate-950 dark:text-white">
                   {pinModalState.mode === 'unlock' ? 'Enter 4-Digit PIN' : 'Set 4-Digit Lock'}
                 </h3>
               </div>
               <button
                 type="button"
                 onClick={() => setPinModalState(null)}
-                className="p-1 text-neutral-500 hover:text-neutral-900 cursor-pointer"
+                className="p-1 text-slate-500 hover:text-slate-900 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -2473,7 +2673,7 @@ export default function App() {
                 }}
                 placeholder="••••"
                 autoFocus
-                className="w-full text-center tracking-[0.5em] text-lg font-mono font-bold py-2 bg-neutral-50 dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded focus:outline-none"
+                className="w-full text-center tracking-[0.5em] text-lg font-mono font-bold py-2 bg-blue-50/50 dark:bg-slate-900 border border-blue-200 dark:border-slate-700 rounded-xl focus:outline-none"
               />
 
               <div className="grid grid-cols-5 gap-1.5">
@@ -2485,7 +2685,7 @@ export default function App() {
                       setPinError('');
                       setPinDigits((prev) => (prev.length < 4 ? prev + digit : prev));
                     }}
-                    className="py-1.5 text-sm font-mono font-semibold rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 hover:bg-neutral-100 transition-colors cursor-pointer"
+                    className="py-1.5 text-sm font-mono font-bold rounded-xl border border-blue-100 dark:border-slate-700 bg-blue-50/50 dark:bg-slate-800 hover:bg-blue-100 transition-colors cursor-pointer"
                   >
                     {digit}
                   </button>
@@ -2493,20 +2693,20 @@ export default function App() {
               </div>
 
               {pinError && (
-                <p className="text-xs text-red-600 text-center font-medium">{pinError}</p>
+                <p className="text-xs text-red-600 text-center font-semibold">{pinError}</p>
               )}
 
               <div className="flex items-center justify-between gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => setPinDigits('')}
-                  className="px-3 py-1.5 text-xs font-medium border border-neutral-300 rounded cursor-pointer"
+                  className="px-3 py-1.5 text-xs font-semibold border border-blue-200 rounded-xl cursor-pointer"
                 >
                   Clear
                 </button>
                 <button
                   type="submit"
-                  className="px-3.5 py-1.5 text-xs font-semibold bg-neutral-900 dark:bg-blue-600 text-white rounded cursor-pointer"
+                  className="px-4 py-1.5 text-xs font-bold bg-[#1273FF] text-white rounded-xl cursor-pointer"
                 >
                   {pinModalState.mode === 'unlock' ? 'Unlock' : 'Lock'}
                 </button>
@@ -2518,42 +2718,42 @@ export default function App() {
 
       {/* FILE PREVIEW MODAL */}
       {previewAttachment && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-[#111827] border border-neutral-200 dark:border-neutral-800 rounded-xl max-w-xl w-full p-5 space-y-3.5 shadow-xl">
-            <div className="flex items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-800 pb-2.5">
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#0D1B38] border border-blue-100 dark:border-slate-800 rounded-2xl max-w-xl w-full p-5 space-y-3.5 shadow-xl">
+            <div className="flex items-center justify-between gap-4 border-b border-blue-100 dark:border-slate-800 pb-2.5">
               <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-neutral-950 dark:text-white truncate">
+                <h3 className="text-sm font-bold text-slate-950 dark:text-white truncate">
                   {previewAttachment.attachment.name}
                 </h3>
-                <p className="text-xs text-neutral-500 font-mono tabular-nums">
+                <p className="text-xs text-slate-500 font-mono tabular-nums">
                   {formatBytes(previewAttachment.attachment.sizeBytes)}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setPreviewAttachment(null)}
-                className="p-1 text-neutral-500 hover:text-neutral-900 dark:text-white rounded cursor-pointer"
+                className="p-1 text-slate-500 hover:text-slate-900 dark:text-white rounded cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="max-h-[55vh] overflow-auto flex flex-col items-center justify-center bg-neutral-50 dark:bg-neutral-900 rounded p-3">
+            <div className="max-h-[55vh] overflow-auto flex flex-col items-center justify-center bg-blue-50/40 dark:bg-slate-900 rounded-xl p-3">
               {previewAttachment.attachment.kind === 'image' && previewAttachment.fullUrl ? (
                 <img
                   src={previewAttachment.fullUrl}
                   alt={previewAttachment.attachment.name}
                   referrerPolicy="no-referrer"
-                  className="max-h-[48vh] object-contain rounded"
+                  className="max-h-[48vh] object-contain rounded-lg"
                 />
               ) : previewAttachment.attachment.textSnippet ? (
-                <pre className="w-full text-xs font-mono text-neutral-800 dark:text-neutral-200 whitespace-pre-wrap p-2">
+                <pre className="w-full text-xs font-mono text-slate-800 dark:text-slate-200 whitespace-pre-wrap p-2">
                   {previewAttachment.attachment.textSnippet}
                 </pre>
               ) : (
                 <div className="py-6 text-center space-y-1">
-                  <FileText className="w-7 h-7 text-blue-600 mx-auto" />
-                  <p className="text-sm font-medium text-neutral-800 dark:text-neutral-200">
+                  <FileText className="w-7 h-7 text-[#1273FF] mx-auto" />
+                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
                     Saved File
                   </p>
                 </div>
@@ -2565,7 +2765,7 @@ export default function App() {
                 <a
                   href={previewAttachment.fullUrl}
                   download={previewAttachment.attachment.name}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded"
+                  className="flex items-center gap-1 px-3.5 py-1.5 text-xs font-bold bg-[#1273FF] text-white rounded-xl"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Save</span>
@@ -2574,7 +2774,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setPreviewAttachment(null)}
-                className="px-3 py-1.5 text-xs font-medium border border-neutral-300 rounded cursor-pointer"
+                className="px-3.5 py-1.5 text-xs font-semibold border border-blue-200 rounded-xl cursor-pointer"
               >
                 Close
               </button>
@@ -2585,25 +2785,25 @@ export default function App() {
 
       {/* AES VAULT INSPECTOR MODAL */}
       {inspectingEncryptedNote && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-[#111827] border border-neutral-200 dark:border-neutral-800 rounded-xl max-w-lg w-full p-5 space-y-3 shadow-xl">
-            <div className="flex items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-800 pb-2.5">
+        <div className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#0D1B38] border border-blue-100 dark:border-slate-800 rounded-2xl max-w-lg w-full p-5 space-y-3 shadow-xl">
+            <div className="flex items-center justify-between gap-4 border-b border-blue-100 dark:border-slate-800 pb-2.5">
               <div className="flex items-center gap-1.5">
-                <Lock className="w-4 h-4 text-emerald-600" />
-                <h3 className="text-sm font-semibold text-neutral-950 dark:text-white">
+                <Lock className="w-4 h-4 text-[#1273FF]" />
+                <h3 className="text-sm font-bold text-slate-950 dark:text-white">
                   AES-256 Data
                 </h3>
               </div>
               <button
                 type="button"
                 onClick={() => setInspectingEncryptedNote(null)}
-                className="p-1 text-neutral-500 hover:text-neutral-900 rounded cursor-pointer"
+                className="p-1 text-slate-500 hover:text-slate-900 rounded cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-3 rounded bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 font-mono text-xs break-all max-h-40 overflow-y-auto text-neutral-700 dark:text-neutral-300">
+            <div className="p-3 rounded-xl bg-blue-50/40 dark:bg-slate-900 border border-blue-100 font-mono text-xs break-all max-h-40 overflow-y-auto text-slate-700 dark:text-slate-300">
               {inspectingEncryptedNote.encryptedPayload || '{"alg":"AES-256-GCM"}'}
             </div>
 
@@ -2611,7 +2811,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setInspectingEncryptedNote(null)}
-                className="px-3 py-1.5 text-xs font-semibold bg-neutral-900 text-white rounded cursor-pointer"
+                className="px-3.5 py-1.5 text-xs font-bold bg-[#1273FF] text-white rounded-xl cursor-pointer"
               >
                 Close
               </button>

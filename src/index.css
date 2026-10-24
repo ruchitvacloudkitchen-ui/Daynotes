@@ -18,3 +18,36 @@
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+.schedule-card-light {
+  background-color: rgba(255, 255, 255, 0.78);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(18, 115, 255, 0.03) 0px,
+    rgba(18, 115, 255, 0.03) 10px,
+    transparent 10px,
+    transparent 20px
+  );
+}
+
+.dark .schedule-card-light {
+  background-color: rgba(17, 29, 56, 0.85);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.025) 0px,
+    rgba(255, 255, 255, 0.025) 10px,
+    transparent 10px,
+    transparent 20px
+  );
+}
+
+.schedule-card-blue {
+  background-color: #1273ff;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.09) 0px,
+    rgba(255, 255, 255, 0.09) 12px,
+    transparent 12px,
+    transparent 24px
+  );
+}
