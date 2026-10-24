@@ -93,6 +93,13 @@ import {
   resumeVoiceAnnouncement,
   stopVoiceAnnouncement,
 } from './utils/voice';
+import {
+  containsLatinCharacters,
+  transliterateWordToTelugu,
+  transliterateSentenceToTelugu,
+  fetchTeluguTransliteration,
+  getTeluguWordSuggestions,
+} from './utils/telugu';
 
 interface AiTaskNotificationItem {
   noteId: string;
@@ -309,10 +316,14 @@ export default function App() {
   const [pinDigits, setPinDigits] = useState('');
   const [pinError, setPinError] = useState('');
 
-  // --- Speech Dictation ---
+  // --- Speech Dictation & Telugu ("తె") Input Tools State ---
   const [isListening, setIsListening] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState('');
   const [speechError, setSpeechError] = useState<string | null>(null);
+  const [teluguSuggestions, setTeluguSuggestions] = useState<string[]>([]);
+  const [activeTeluguField, setActiveTeluguField] = useState<'title' | 'content' | null>(
+    null
+  );
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const shouldKeepListeningRef = useRef(false);
 
@@ -719,16 +730,47 @@ export default function App() {
           }
         }
 
+        const isTeluguActive = langCode === 'te-IN';
+
         if (finalChunk.trim()) {
+          const rawFinal = finalChunk.trim();
+          // If speaking in Telugu, ensure spoken words are immediately written in Telugu script only
+          const immediateText = isTeluguActive
+            ? transliterateSentenceToTelugu(rawFinal)
+            : rawFinal;
+
           setComposerContent((prev) =>
-            prev ? `${prev.trim()} ${finalChunk.trim()}` : finalChunk.trim()
+            prev ? `${prev.trim()} ${immediateText}` : immediateText
           );
           setComposerTitle((prevTitle) => {
             if (prevTitle.trim()) return prevTitle;
-            return finalChunk.trim().split(/\s+/).slice(0, 3).join(' ');
+            return immediateText.split(/\s+/).slice(0, 3).join(' ');
           });
+
+          // Also refine with Google Input Tools transliteration if browser returned Roman letters
+          if (isTeluguActive && containsLatinCharacters(rawFinal)) {
+            fetchTeluguTransliteration(rawFinal)
+              .then((refinedTelugu) => {
+                if (refinedTelugu && refinedTelugu !== immediateText) {
+                  setComposerContent((prev) =>
+                    prev.endsWith(immediateText)
+                      ? `${prev.slice(0, prev.length - immediateText.length)}${refinedTelugu}`
+                      : prev
+                  );
+                  setComposerTitle((prevTitle) =>
+                    prevTitle === immediateText.split(/\s+/).slice(0, 3).join(' ')
+                      ? refinedTelugu.split(/\s+/).slice(0, 3).join(' ')
+                      : prevTitle
+                  );
+                }
+              })
+              .catch(() => {});
+          }
         }
-        setInterimTranscript(interimChunk);
+
+        setInterimTranscript(
+          isTeluguActive ? transliterateSentenceToTelugu(interimChunk) : interimChunk
+        );
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
@@ -766,10 +808,93 @@ export default function App() {
   const handleSelectDictationLanguage = (lang: SupportedLanguage) => {
     setComposerLanguage(lang);
     setShowLanguageDropdown(false);
+    setTeluguSuggestions([]);
     if (isListening) {
       stopDictation();
       setTimeout(() => startDictation(lang), 150);
     }
+  };
+
+  // --- "తె" Button Toggle & Google-Tools-Style Telugu Typing Handlers ---
+  const isTeluguMode = composerLanguage === 'te-IN';
+
+  const handleToggleTeluguButton = () => {
+    const nextLang: SupportedLanguage = composerLanguage === 'te-IN' ? 'en-IN' : 'te-IN';
+    setComposerLanguage(nextLang);
+    setShowLanguageDropdown(false);
+    setTeluguSuggestions([]);
+    if (isListening) {
+      stopDictation();
+      setTimeout(() => startDictation(nextLang), 150);
+    }
+  };
+
+  const handleTeluguInputChange = async (
+    value: string,
+    field: 'title' | 'content'
+  ) => {
+    setActiveTeluguField(field);
+    if (field === 'title') {
+      setComposerTitle(value);
+    } else {
+      setComposerContent(value);
+    }
+
+    if (!isTeluguMode) {
+      setTeluguSuggestions([]);
+      return;
+    }
+
+    // If the user just typed a space or newline after a Roman word, transliterate that word into Telugu script
+    if (/\s$/.test(value)) {
+      setTeluguSuggestions([]);
+      const match = value.match(/^(.*?)([a-zA-Z]+)(\s+)$/s);
+      if (match) {
+        const [, prefix, lastRomanWord, trailingSpace] = match;
+        const immediateTelugu = transliterateWordToTelugu(lastRomanWord);
+        const updatedImmediate = `${prefix}${immediateTelugu}${trailingSpace}`;
+        if (field === 'title') {
+          setComposerTitle(updatedImmediate);
+        } else {
+          setComposerContent(updatedImmediate);
+        }
+
+        // Refine via Google Input Tools for exact Telugu word match
+        const refined = await fetchTeluguTransliteration(lastRomanWord);
+        if (refined && refined !== immediateTelugu) {
+          const updatedRefined = `${prefix}${refined}${trailingSpace}`;
+          if (field === 'title') {
+            setComposerTitle((curr) =>
+              curr === updatedImmediate ? updatedRefined : curr
+            );
+          } else {
+            setComposerContent((curr) =>
+              curr === updatedImmediate ? updatedRefined : curr
+            );
+          }
+        }
+      }
+      return;
+    }
+
+    // Otherwise, show live Telugu word candidate chips for the current Roman word being typed
+    const currentWordMatch = value.match(/([a-zA-Z]+)$/);
+    if (currentWordMatch) {
+      const suggestions = await getTeluguWordSuggestions(currentWordMatch[1]);
+      setTeluguSuggestions(suggestions);
+    } else {
+      setTeluguSuggestions([]);
+    }
+  };
+
+  const handlePickTeluguSuggestion = (suggestion: string) => {
+    if (!activeTeluguField) return;
+    if (activeTeluguField === 'title') {
+      setComposerTitle((prev) => prev.replace(/([a-zA-Z]+)$/, `${suggestion} `));
+    } else {
+      setComposerContent((prev) => prev.replace(/([a-zA-Z]+)$/, `${suggestion} `));
+    }
+    setTeluguSuggestions([]);
   };
 
   // --- Composer Reminder Preset Selection (5min, 15min, 30min, set timer) ---
@@ -900,13 +1025,22 @@ export default function App() {
   // --- Create Note ---
   const handleCreateNote = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    const rawContent = [composerContent.trim(), interimTranscript.trim()]
+    const combinedRawContent = [composerContent.trim(), interimTranscript.trim()]
       .filter(Boolean)
       .join(' ');
-    const rawTitle =
+    const rawContent =
+      composerLanguage === 'te-IN' && containsLatinCharacters(combinedRawContent)
+        ? await fetchTeluguTransliteration(combinedRawContent)
+        : combinedRawContent;
+    const initialTitle =
       composerTitle.trim() ||
       rawContent.split(/\s+/).slice(0, 3).join(' ') ||
-      'Note';
+      (composerLanguage === 'te-IN' ? 'నోట్' : 'Note');
+    const rawTitle =
+      composerLanguage === 'te-IN' && containsLatinCharacters(initialTitle)
+        ? await fetchTeluguTransliteration(initialTitle)
+        : initialTitle;
+    setTeluguSuggestions([]);
 
     if (!rawContent && !composerTitle.trim() && composerAttachments.length === 0) {
       return;
@@ -1629,7 +1763,7 @@ export default function App() {
           <button
             type="button"
             onClick={handleGoogleAuth}
-            title={user ? `Google Synced (${user.email}) — Click to Sign Out` : 'Sync with Google'}
+            title={user ? `Saved in Google (${user.email}) — Click to Sign Out` : 'Save in Google'}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-colors cursor-pointer ${
               user
                 ? 'border-blue-300 bg-blue-50/90 text-[#1273FF] dark:border-blue-800 dark:bg-blue-950/60 dark:text-blue-300'
@@ -1637,7 +1771,7 @@ export default function App() {
             }`}
           >
             <GoogleSymbol className="w-4 h-4 shrink-0" />
-            <span>{user ? 'Synced' : 'Sync'}</span>
+            <span>{user ? 'Saved in Google' : 'Save in Google'}</span>
           </button>
 
           <button
@@ -1869,7 +2003,7 @@ export default function App() {
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-white/80 dark:border-slate-700 rounded-xl bg-white/80 dark:bg-slate-800 text-slate-800 dark:text-slate-100 cursor-pointer"
                 >
                   <GoogleSymbol className="w-3.5 h-3.5" />
-                  <span>{user ? 'Sign Out' : 'Google Sync'}</span>
+                  <span>{user ? 'Sign Out' : 'Save in Google'}</span>
                 </button>
               </div>
               <div className="flex items-center justify-between text-xs text-slate-500">
@@ -2092,7 +2226,7 @@ export default function App() {
                     setCalendarMonthDate(new Date(selectedDate));
                     setShowMonthCalendar((prev) => !prev);
                   }}
-                  className="flex items-center gap-1.5 text-xl sm:text-2xl tracking-tight text-slate-950 dark:text-white cursor-pointer"
+                  className="flex items-center gap-1 text-sm sm:text-base tracking-tight text-slate-950 dark:text-white cursor-pointer"
                   title="Click to view full month dates"
                 >
                   <span className="font-extrabold">{currentMonthYear.month}</span>
@@ -2100,7 +2234,7 @@ export default function App() {
                     {currentMonthYear.year}
                   </span>
                   <ChevronDown
-                    className={`w-4 h-4 text-slate-700 dark:text-slate-300 mt-0.5 transition-transform ${
+                    className={`w-3.5 h-3.5 text-slate-700 dark:text-slate-300 transition-transform ${
                       showMonthCalendar ? 'rotate-180 text-[#1273FF]' : ''
                     }`}
                   />
@@ -2260,9 +2394,9 @@ export default function App() {
               aria-label="New Note"
               className="fresh-note-crosslines backdrop-blur-md border border-white/90 dark:border-slate-800 rounded-2xl p-5 space-y-4 shadow-[0_8px_30px_rgba(18,115,255,0.06)]"
             >
-              {/* Top Row: Language Button + Lock Symbol Beside Language Box + Speak Button */}
+              {/* Top Row: Language Button + "తె" Telugu Button + Lock Symbol + Speak Button */}
               <div className="flex items-center justify-between gap-2 pb-3 border-b border-blue-100/80 dark:border-slate-800">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   {/* Language Dropdown Button */}
                   <div className="relative">
                     <button
@@ -2298,18 +2432,37 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Small Lock Symbol Beside Language Box (4-Digit Number Lock) */}
+                  {/* "తె" Button to Write & Speak in Telugu (Google Input Tools Style) */}
+                  <button
+                    type="button"
+                    onClick={handleToggleTeluguButton}
+                    title={
+                      isTeluguMode
+                        ? 'Telugu Typing & Voice Active (తె) — Click to switch to English'
+                        : 'Click to write & speak in Telugu (తె)'
+                    }
+                    className={`px-3 py-1.5 text-xs font-extrabold border rounded-xl transition-colors cursor-pointer shadow-xs ${
+                      isTeluguMode
+                        ? 'bg-[#1273FF] text-white border-[#1273FF]'
+                        : 'bg-white/90 dark:bg-slate-800 border-blue-200 dark:border-slate-700 text-[#1273FF] dark:text-blue-300 hover:bg-white'
+                    }`}
+                  >
+                    తె
+                  </button>
+
+                  {/* Small Lock Symbol Beside Language Box with "Lock note" Text */}
                   <button
                     type="button"
                     onClick={handleOpenComposerLock}
                     title={composerPinCode ? `PIN Set (${composerPinCode})` : 'Set 4-Digit Lock'}
-                    className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold border rounded-xl transition-colors cursor-pointer ${
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold border rounded-xl transition-colors cursor-pointer ${
                       composerPinCode
                         ? 'bg-[#1273FF] text-white border-[#1273FF]'
                         : 'bg-white/90 dark:bg-slate-800 border-blue-100 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-white'
                     }`}
                   >
                     <Lock className="w-3.5 h-3.5" />
+                    <span>Lock note</span>
                     {composerPinCode && <span className="font-mono text-xs">••••</span>}
                   </button>
                 </div>
@@ -2332,7 +2485,7 @@ export default function App() {
                   ) : (
                     <>
                       <Mic className="w-3.5 h-3.5" />
-                      <span>Speak</span>
+                      <span>{isTeluguMode ? 'Speak (తె)' : 'Speak'}</span>
                     </>
                   )}
                 </button>
@@ -2340,7 +2493,8 @@ export default function App() {
 
               {isListening && (
                 <div className="px-3.5 py-2 rounded-xl bg-blue-50/90 dark:bg-blue-950/50 border border-blue-200 text-xs font-medium text-[#1273FF] dark:text-blue-200">
-                  Speaking... {interimTranscript && <em>“{interimTranscript}”</em>}
+                  {isTeluguMode ? 'తెలుగులో మాట్లాడండి...' : 'Speaking...'}{' '}
+                  {interimTranscript && <em>“{interimTranscript}”</em>}
                 </div>
               )}
 
@@ -2357,34 +2511,64 @@ export default function App() {
                 </div>
               )}
 
-              {/* Note Inputs with Color Dots on Top of the Title & Cross-Line Title Background */}
+              {/* Note Inputs with Color Dots on Top of the Title & White Title Box */}
               <form onSubmit={handleCreateNote} className="space-y-3.5">
                 {/* Round Color Dots Placed on Top of the Title */}
-                <div className="flex items-center gap-2 px-0.5">
-                  {COLOR_FOLDERS.map((col) => {
-                    const active = composerImportance === col.id;
-                    return (
-                      <button
-                        key={col.id}
-                        type="button"
-                        onClick={() => setComposerImportance(col.id)}
-                        aria-label={col.folderName}
-                        title={col.folderName}
-                        className={`w-4 h-4 rounded-full ${col.bgClass} flex items-center justify-center cursor-pointer`}
-                      >
-                        {active && <Check className="w-2.5 h-2.5 text-white stroke-[3]" />}
-                      </button>
-                    );
-                  })}
+                <div className="flex items-center justify-between gap-2 px-0.5">
+                  <div className="flex items-center gap-2">
+                    {COLOR_FOLDERS.map((col) => {
+                      const active = composerImportance === col.id;
+                      return (
+                        <button
+                          key={col.id}
+                          type="button"
+                          onClick={() => setComposerImportance(col.id)}
+                          aria-label={col.folderName}
+                          title={col.folderName}
+                          className={`w-4 h-4 rounded-full ${col.bgClass} flex items-center justify-center cursor-pointer`}
+                        >
+                          {active && <Check className="w-2.5 h-2.5 text-white stroke-[3]" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {isTeluguMode && (
+                    <span className="text-[11px] font-bold text-[#1273FF] dark:text-blue-300">
+                      తెలుగు టైపింగ్ & వాయిస్ ఆన్
+                    </span>
+                  )}
                 </div>
+
+                {/* Google Input Tools Style Telugu Candidate Bar */}
+                {isTeluguMode && teluguSuggestions.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap px-2.5 py-1.5 rounded-xl bg-white/95 dark:bg-slate-900 border border-blue-200 dark:border-slate-700 shadow-xs">
+                    <span className="text-[11px] font-bold text-slate-400 mr-1">తె:</span>
+                    {teluguSuggestions.map((sug, idx) => (
+                      <button
+                        key={`${sug}_${idx}`}
+                        type="button"
+                        onClick={() => handlePickTeluguSuggestion(sug)}
+                        className={`px-2.5 py-0.5 text-xs font-bold rounded-lg cursor-pointer transition-colors ${
+                          idx === 0
+                            ? 'bg-[#1273FF] text-white'
+                            : 'bg-blue-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-blue-100'
+                        }`}
+                      >
+                        {sug}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 <input
                   ref={composerTitleInputRef}
                   type="text"
                   value={composerTitle}
-                  onChange={(e) => setComposerTitle(e.target.value)}
-                  placeholder="Title..."
-                  className="w-full px-4 py-2.5 text-base font-bold title-crosslines border border-blue-200/90 dark:border-slate-700 rounded-xl focus:outline-none focus:border-[#1273FF] text-slate-900 dark:text-white"
+                  onFocus={() => setActiveTeluguField('title')}
+                  onChange={(e) => handleTeluguInputChange(e.target.value, 'title')}
+                  placeholder={isTeluguMode ? 'శీర్షిక (Title)...' : 'Title...'}
+                  className="w-full px-4 py-2.5 text-base font-bold bg-white dark:bg-slate-900 border border-blue-200/90 dark:border-slate-700 rounded-xl focus:outline-none focus:border-[#1273FF] text-slate-900 dark:text-white"
                 />
 
                 <textarea
@@ -2394,8 +2578,13 @@ export default function App() {
                       ? `${composerContent} ${interimTranscript}`.trim()
                       : composerContent
                   }
-                  onChange={(e) => setComposerContent(e.target.value)}
-                  placeholder="Note..."
+                  onFocus={() => setActiveTeluguField('content')}
+                  onChange={(e) => handleTeluguInputChange(e.target.value, 'content')}
+                  placeholder={
+                    isTeluguMode
+                      ? 'తెలుగులో రాయండి లేదా మాట్లాడండి (Type or speak in Telugu)...'
+                      : 'Note...'
+                  }
                   className="w-full min-h-[180px] px-4 py-3 text-base leading-relaxed bg-white/95 dark:bg-slate-900/90 border border-blue-100 dark:border-slate-700 rounded-xl focus:outline-none focus:border-[#1273FF] text-slate-900 dark:text-white resize-y"
                 />
 
@@ -2478,44 +2667,30 @@ export default function App() {
                       )}
                     </div>
 
-                    {/* "voice" button + Play and Pause buttons beside it ("text" and "off" removed) */}
-                    <div className="inline-flex items-center p-0.5 bg-blue-50/90 dark:bg-slate-800 rounded-xl border border-blue-200 dark:border-slate-700 gap-1">
+                    {/* "Play note" + Play and Pause buttons in one fixed color (no color change) */}
+                    <div className="inline-flex items-center p-0.5 bg-white/90 dark:bg-slate-800 rounded-xl border border-blue-200 dark:border-slate-700 gap-1">
                       <button
                         type="button"
-                        onClick={() =>
-                          setComposerAlertMode((prev) => (prev === 'voice' ? 'off' : 'voice'))
-                        }
-                        className={`px-2.5 py-0.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                          composerAlertMode === 'voice'
-                            ? 'bg-[#1273FF] text-white'
-                            : 'text-slate-700 dark:text-slate-300 hover:bg-white/70'
-                        }`}
+                        onClick={handlePlayComposerVoice}
+                        className="px-2.5 py-0.5 text-xs font-semibold rounded-lg text-[#1273FF] dark:text-blue-300 whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        voice
+                        Play note
                       </button>
                       <button
                         type="button"
                         onClick={handlePlayComposerVoice}
-                        title="Play voice"
-                        aria-label="Play voice"
-                        className={`p-1 rounded-lg transition-colors cursor-pointer ${
-                          speakingNoteId === 'composer' && !isSpeechPaused
-                            ? 'bg-[#1273FF] text-white'
-                            : 'text-[#1273FF] hover:bg-white/80 dark:hover:bg-slate-700'
-                        }`}
+                        title="Play note"
+                        aria-label="Play note"
+                        className="p-1 rounded-lg text-[#1273FF] dark:text-blue-300 cursor-pointer"
                       >
                         <Play className="w-3.5 h-3.5 fill-current" />
                       </button>
                       <button
                         type="button"
                         onClick={handlePauseComposerVoice}
-                        title="Pause voice"
-                        aria-label="Pause voice"
-                        className={`p-1 rounded-lg transition-colors cursor-pointer ${
-                          speakingNoteId === 'composer' && isSpeechPaused
-                            ? 'bg-[#1273FF] text-white'
-                            : 'text-slate-600 dark:text-slate-300 hover:bg-white/80 dark:hover:bg-slate-700'
-                        }`}
+                        title="Pause note"
+                        aria-label="Pause note"
+                        className="p-1 rounded-lg text-[#1273FF] dark:text-blue-300 cursor-pointer"
                       >
                         <Pause className="w-3.5 h-3.5" />
                       </button>
@@ -2638,21 +2813,6 @@ export default function App() {
             {/* PREVIOUS NOTES SCHEDULE TIMELINE SECTION (SOLID DARKER LIGHT-BLUE CARDS, NO CROSS LINES) */}
             {showPreviousNotes && (
               <div ref={previousNotesRef} className="space-y-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="relative flex-1">
-                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Search schedule notes..."
-                      className="w-full pl-9 pr-3.5 py-2 text-sm bg-white/75 dark:bg-slate-900/80 border border-white/90 dark:border-slate-800 rounded-2xl focus:outline-none focus:border-[#1273FF]"
-                    />
-                  </div>
-                  <span className="text-xs font-semibold text-slate-500 font-mono tabular-nums shrink-0">
-                    {filteredNotes.length} notes
-                  </span>
-                </div>
 
                 {filteredNotes.length === 0 ? (
                   <div className="p-8 schedule-card-light border border-blue-200/90 dark:border-slate-800 rounded-2xl text-center">
@@ -2737,13 +2897,14 @@ export default function App() {
                                   title={
                                     note.isPinLocked ? 'Unlock 4-digit PIN' : 'Set 4-digit PIN'
                                   }
-                                  className="p-1 cursor-pointer text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
+                                  className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/85 dark:bg-slate-800 border border-blue-200 dark:border-slate-700 text-xs font-semibold cursor-pointer text-slate-700 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
                                 >
                                   {note.isPinLocked ? (
-                                    <Lock className="w-3.5 h-3.5" />
+                                    <Lock className="w-3.5 h-3.5 text-[#1273FF]" />
                                   ) : (
-                                    <Unlock className="w-3.5 h-3.5" />
+                                    <Unlock className="w-3.5 h-3.5 text-[#1273FF]" />
                                   )}
+                                  <span>Lock note</span>
                                 </button>
                                 <button
                                   type="button"
@@ -2899,47 +3060,30 @@ export default function App() {
                                           )}
                                         </div>
 
-                                        {/* "voice" button + Play & Pause buttons beside it ("text" and "off" removed) */}
-                                        <div className="inline-flex items-center p-0.5 rounded-xl gap-1 bg-white/85 dark:bg-slate-800 border border-blue-200 dark:border-slate-700">
+                                        {/* "Play note" + Play & Pause buttons in one fixed color (no color change) */}
+                                        <div className="inline-flex items-center p-0.5 rounded-xl gap-1 bg-white/90 dark:bg-slate-800 border border-blue-200 dark:border-slate-700">
                                           <button
                                             type="button"
-                                            onClick={() =>
-                                              handleSetNoteAlertMode(
-                                                note,
-                                                note.alertMode === 'voice' ? 'off' : 'voice'
-                                              )
-                                            }
-                                            className={`px-2 py-0.5 text-xs font-semibold rounded-lg cursor-pointer ${
-                                              note.alertMode === 'voice'
-                                                ? 'bg-[#1273FF] text-white'
-                                                : 'text-slate-600 dark:text-slate-400'
-                                            }`}
+                                            onClick={() => handleSpeakNoteNow(note)}
+                                            className="px-2 py-0.5 text-xs font-semibold rounded-lg text-[#1273FF] dark:text-blue-300 cursor-pointer"
                                           >
-                                            voice
+                                            Play note
                                           </button>
                                           <button
                                             type="button"
                                             onClick={() => handleSpeakNoteNow(note)}
-                                            title="Play voice"
-                                            aria-label="Play voice"
-                                            className={`p-1 rounded-lg cursor-pointer ${
-                                              isSpeakingThis && !isSpeechPaused
-                                                ? 'bg-[#1273FF] text-white'
-                                                : 'text-[#1273FF] hover:bg-blue-50 dark:hover:bg-slate-700'
-                                            }`}
+                                            title="Play note"
+                                            aria-label="Play note"
+                                            className="p-1 rounded-lg text-[#1273FF] dark:text-blue-300 cursor-pointer"
                                           >
                                             <Play className="w-3.5 h-3.5 fill-current" />
                                           </button>
                                           <button
                                             type="button"
                                             onClick={() => handlePauseNoteVoice(note)}
-                                            title="Pause voice"
-                                            aria-label="Pause voice"
-                                            className={`p-1 rounded-lg cursor-pointer ${
-                                              isSpeakingThis && isSpeechPaused
-                                                ? 'bg-[#1273FF] text-white'
-                                                : 'text-slate-600 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-slate-700'
-                                            }`}
+                                            title="Pause note"
+                                            aria-label="Pause note"
+                                            className="p-1 rounded-lg text-[#1273FF] dark:text-blue-300 cursor-pointer"
                                           >
                                             <Pause className="w-3.5 h-3.5" />
                                           </button>
@@ -3407,7 +3551,7 @@ export default function App() {
                       <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-blue-200/70 dark:border-slate-700">
                         <div className="inline-flex items-center p-0.5 rounded-xl gap-1 bg-white/85 dark:bg-slate-800 border border-blue-200 dark:border-slate-700">
                           <span className="px-2 py-0.5 text-xs font-semibold text-[#1273FF]">
-                            voice
+                            Play note
                           </span>
                           <button
                             type="button"
