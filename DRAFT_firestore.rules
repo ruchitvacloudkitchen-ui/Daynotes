@@ -1,0 +1,132 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidNote(data) {
+      return data.keys().hasAll([
+        'ownerId',
+        'title',
+        'content',
+        'encryptedPayload',
+        'isEncrypted',
+        'language',
+        'reminderEnabled',
+        'reminderTime',
+        'reminderAnnounced',
+        'isCompleted',
+        'attachmentsSummary',
+        'attachmentCount',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId',
+        'title',
+        'content',
+        'encryptedPayload',
+        'isEncrypted',
+        'language',
+        'reminderEnabled',
+        'reminderTime',
+        'reminderAnnounced',
+        'isCompleted',
+        'attachmentsSummary',
+        'attachmentCount',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.ownerId == request.auth.uid &&
+      isValidId(data.ownerId) &&
+      data.title is string && data.title.size() <= 500 &&
+      data.content is string && data.content.size() <= 20000 &&
+      data.encryptedPayload is string && data.encryptedPayload.size() <= 60000 &&
+      data.isEncrypted is bool &&
+      data.language is string && data.language.size() <= 16 &&
+      (data.language == 'en-IN' || data.language == 'te-IN' || data.language == 'hi-IN') &&
+      data.reminderEnabled is bool &&
+      data.reminderTime is string && data.reminderTime.size() <= 64 &&
+      data.reminderAnnounced is bool &&
+      data.isCompleted is bool &&
+      data.attachmentsSummary is string && data.attachmentsSummary.size() <= 250000 &&
+      data.attachmentCount is int && data.attachmentCount >= 0 && data.attachmentCount <= 20 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    match /notes/{noteId} {
+      allow get: if isSignedIn() && isValidId(noteId) && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(noteId) &&
+        isValidNote(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if (
+        isValidNote(incoming()) &&
+        isVerifiedUser() &&
+        isValidId(noteId) &&
+        existing().ownerId == request.auth.uid &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Full note, encryption, attachment, or reminder update
+          (incoming().diff(existing()).affectedKeys().hasOnly([
+            'title',
+            'content',
+            'encryptedPayload',
+            'isEncrypted',
+            'language',
+            'reminderEnabled',
+            'reminderTime',
+            'reminderAnnounced',
+            'isCompleted',
+            'attachmentsSummary',
+            'attachmentCount',
+            'updatedAt'
+          ])) ||
+          // Action 2: Toggle reminder or mark voice announcement delivered
+          (incoming().diff(existing()).affectedKeys().hasOnly([
+            'reminderEnabled',
+            'reminderTime',
+            'reminderAnnounced',
+            'updatedAt'
+          ])) ||
+          // Action 3: Toggle completion state
+          (incoming().diff(existing()).affectedKeys().hasOnly([
+            'isCompleted',
+            'updatedAt'
+          ]))
+        )
+      );
+
+      allow delete: if isVerifiedUser() && isValidId(noteId) && existing().ownerId == request.auth.uid;
+    }
+  }
+}

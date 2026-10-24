@@ -1,0 +1,103 @@
+{
+  "entities": {
+    "NoteRecord": {
+      "title": "NoteRecord",
+      "description": "A user's voice or text note with optional AES-256-GCM encrypted payload, multilingual voice setting, scheduled voice reminder, and small attachment boxes.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the authenticated note owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Note title or encrypted placeholder label.",
+          "maxLength": 500
+        },
+        "content": {
+          "type": "string",
+          "description": "Note body text or encrypted notice.",
+          "maxLength": 20000
+        },
+        "encryptedPayload": {
+          "type": "string",
+          "description": "AES-256-GCM encrypted JSON bundle containing ciphertext, IV, and salt.",
+          "maxLength": 60000
+        },
+        "isEncrypted": {
+          "type": "boolean",
+          "description": "Whether the note payload is encrypted with AES-256-GCM before cloud sync."
+        },
+        "language": {
+          "type": "string",
+          "description": "Voice dictation and TTS announcement locale.",
+          "enum": ["en-IN", "te-IN", "hi-IN"],
+          "maxLength": 16
+        },
+        "reminderEnabled": {
+          "type": "boolean",
+          "description": "Whether auto-reminder voice notification is switched on."
+        },
+        "reminderTime": {
+          "type": "string",
+          "description": "Scheduled ISO timestamp or local datetime string for the voice reminder.",
+          "maxLength": 64
+        },
+        "reminderAnnounced": {
+          "type": "boolean",
+          "description": "Whether the scheduled reminder has already been announced via voice note."
+        },
+        "isCompleted": {
+          "type": "boolean",
+          "description": "Whether the note or task item is marked completed."
+        },
+        "attachmentsSummary": {
+          "type": "string",
+          "description": "Serialized or encrypted metadata and compact previews for attached images and documents.",
+          "maxLength": 250000
+        },
+        "attachmentCount": {
+          "type": "number",
+          "description": "Number of small attachment boxes populated on this note."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the note was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the note was last updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "title",
+        "content",
+        "encryptedPayload",
+        "isEncrypted",
+        "language",
+        "reminderEnabled",
+        "reminderTime",
+        "reminderAnnounced",
+        "isCompleted",
+        "attachmentsSummary",
+        "attachmentCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/notes/{noteId}": {
+      "schema": {
+        "$ref": "#/entities/NoteRecord"
+      },
+      "description": "Stores user notes synced across devices with AES-256-GCM encryption, multilingual voice dictation settings, attachment box previews, and auto-reminder schedules."
+    }
+  }
+}
